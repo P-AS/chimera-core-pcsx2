@@ -42,6 +42,7 @@
 #include "common/Console.h"
 
 #include <algorithm>
+#include <memory>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -762,6 +763,44 @@ std::unique_ptr<GSDevice> MakeChimeraGSDevice()
 static constexpr int kFrameMaxW = 2560, kFrameMaxH = 2048;
 ECL_INVISIBLE static u8* g_frameBack;
 
+#ifdef CHIMERA_GUEST_GL
+/* A texture of the Vulkan device, read back: PCSX2's own download texture,
+ * one kept for each format and as large as the largest asked for so far. The
+ * rows it returns are good until the next call. Used for the finished frame
+ * (below) and for the render targets a state carries (gs-shadow.cpp).
+ *
+ * They belong to the device, so they are dropped before it is - after a load,
+ * while the old device is being let go of (ChimeraGSDropDownloads). */
+static std::unique_ptr<GSDownloadTexture> s_downloads[static_cast<int>(GSTexture::Format::Last) + 1];
+
+const u8* ChimeraGSDownload(GSTexture* tex, int width, int height, u32* pitch)
+{
+	std::unique_ptr<GSDownloadTexture>& dl = s_downloads[static_cast<int>(tex->GetFormat())];
+	if (!dl || static_cast<int>(dl->GetWidth()) < width || static_cast<int>(dl->GetHeight()) < height)
+	{
+		const u32 w = std::max<u32>(width, dl ? dl->GetWidth() : 0);
+		const u32 h = std::max<u32>(height, dl ? dl->GetHeight() : 0);
+		dl.reset();
+		dl = g_gs_device->CreateDownloadTexture(w, h, tex->GetFormat());
+		if (!dl)
+			return nullptr;
+	}
+	const GSVector4i rc(0, 0, width, height);
+	dl->CopyFromTexture(rc, tex, rc, 0, true);
+	dl->Flush();
+	if (!dl->Map(rc))
+		return nullptr;
+	*pitch = dl->GetMapPitch();
+	return dl->GetMapPointer();
+}
+
+void ChimeraGSDropDownloads()
+{
+	for (std::unique_ptr<GSDownloadTexture>& dl : s_downloads)
+		dl.reset();
+}
+#endif
+
 extern "C" void ChimeraGSReserveFrame()
 {
 	if (!g_frameBack)
@@ -785,7 +824,8 @@ extern "C" bool ChimeraGSGetFrame(const u8** bits, int* pitch, int* width, int* 
 	 * of this core's memory, so it is read back into one. glGetTextureImage
 	 * rather than a framebuffer read: what was presented is this texture, and
 	 * whatever is in framebuffer 0 is whatever was left lying there. */
-	if (g_gs_device->GetRenderAPI() == RenderAPI::OpenGL)
+	const RenderAPI api = g_gs_device->GetRenderAPI();
+	if (api == RenderAPI::OpenGL || api == RenderAPI::Vulkan)
 	{
 		/* never taken here: see g_frameBack */
 		if (!g_frameBack)
@@ -809,10 +849,30 @@ extern "C" bool ChimeraGSGetFrame(const u8** bits, int* pitch, int* width, int* 
 			size = out;
 		}
 
+		if (api == RenderAPI::Vulkan)
+		{
+			/* Under the Vulkan renderer the frame is an image on the card, and
+			 * it comes back the way PCSX2 itself reads a texture back: its
+			 * download texture, mapped, and the rows copied out of it. */
+			u32 row_pitch = 0;
+			const u8* const rows = ChimeraGSDownload(frame, size.x, size.y, &row_pitch);
+			if (rows)
+			{
+				for (int y = 0; y < size.y; y++)
+					std::memcpy(g_frameBack + (size_t)y * size.x * 4, rows + (size_t)y * row_pitch, (size_t)size.x * 4);
+			}
+			if (fitted)
+				g_gs_device->Recycle(fitted);
+			if (!rows)
+				return false;
+		}
+		else
+		{
 		glGetTextureImage(static_cast<GSTextureOGL*>(frame)->GetID(), 0, GL_RGBA, GL_UNSIGNED_BYTE,
 			(GLsizei)((size_t)size.x * size.y * 4), g_frameBack);
 		if (fitted)
 			g_gs_device->Recycle(fitted);
+		}
 		*bits = g_frameBack;
 		*pitch = size.x * 4;
 		*width = size.x;

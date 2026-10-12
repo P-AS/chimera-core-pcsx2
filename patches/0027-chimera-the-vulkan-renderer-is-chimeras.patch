@@ -1,0 +1,394 @@
+diff --git a/pcsx2/GS/GS.cpp b/pcsx2/GS/GS.cpp
+--- a/pcsx2/GS/GS.cpp
++++ b/pcsx2/GS/GS.cpp
+@@ -34,6 +34,11 @@
+ #ifdef CHIMERA_SOFTWARE_ONLY
+ std::unique_ptr<GSDevice> MakeChimeraGSDevice();
+ #endif
++#ifdef CHIMERA_GUEST_VK
++// chimera: the Vulkan renderer too, for the Renderer setting's "vulkan-hw".
++// It draws through Chimera's Vulkan bridge on the computer's graphics card.
++#include "GS/Renderers/Vulkan/GSDeviceVK.h"
++#endif
+ #include "GS/Renderers/HW/GSTextureReplacements.h"
+ #include "VMManager.h"
+ 
+@@ -102,6 +107,10 @@
+ 	if (renderer == GSRendererType::OGL)
+ 		return RenderAPI::OpenGL;
+ #endif
++#ifdef CHIMERA_GUEST_VK
++	if (renderer == GSRendererType::VK)
++		return RenderAPI::Vulkan;
++#endif
+ 	return RenderAPI::None;
+ #else
+ 	switch (renderer)
+@@ -145,6 +154,11 @@
+ 		g_gs_device = std::make_unique<GSDeviceOGL>();
+ 	else
+ #endif
++#ifdef CHIMERA_GUEST_VK
++	if (new_api == RenderAPI::Vulkan)
++		g_gs_device = std::make_unique<GSDeviceVK>();
++	else
++#endif
+ 	g_gs_device = MakeChimeraGSDevice();
+ #else
+ 	switch (new_api)
+@@ -212,6 +226,10 @@
+ 	return true;
+ }
+ 
++#ifdef CHIMERA_GUEST_VK
++extern "C" void ChimeraOldDeviceGone(void);
++#endif
++
+ static void CloseGSDevice(bool clear_state)
+ {
+ 	if (!g_gs_device)
+@@ -220,6 +238,12 @@
+ 	ImGuiManager::Shutdown(clear_state);
+ 	g_gs_device->Destroy();
+ 	g_gs_device.reset();
++#ifdef CHIMERA_GUEST_VK
++	// chimera: the old device has been let go of. After a load it was a Vulkan
++	// device that no longer existed, and until this moment none of its
++	// commands went anywhere (chimera-core-pcsx2, waterbox/cinterface.cpp).
++	ChimeraOldDeviceGone();
++#endif
+ }
+ 
+ static void GSClampUpscaleMultiplier(Pcsx2Config::GSOptions& config)
+diff --git a/pcsx2/GS/Renderers/Vulkan/GSDeviceVK.cpp b/pcsx2/GS/Renderers/Vulkan/GSDeviceVK.cpp
+--- a/pcsx2/GS/Renderers/Vulkan/GSDeviceVK.cpp
++++ b/pcsx2/GS/Renderers/Vulkan/GSDeviceVK.cpp
+@@ -40,11 +40,26 @@
+ 	MAX_INPUT_ATTACHMENT_IMAGE_DESCRIPTORS_PER_FRAME = MAX_DRAW_CALLS_PER_FRAME,
+ 	MAX_DESCRIPTOR_SETS_PER_FRAME = MAX_DRAW_CALLS_PER_FRAME * 2,
+ 
++#ifdef CHIMERA_GUEST_VK
++	// chimera: the sizes the OpenGL device has in this core (GSDeviceOGL.cpp),
++	// which draws the same batches. Through Chimera's Vulkan bridge every
++	// mapped byte is a byte of the core's own memory - in every savestate,
++	// and copied whenever the device is made, which is after every load. A
++	// buffer that fills up submits and waits, and an upload over half the
++	// texture buffer takes a staging buffer of its own, so smaller is only
++	// slower in a frame that draws more than a PS2 can.
++	VERTEX_BUFFER_SIZE = 4 * 1024 * 1024,
++	INDEX_BUFFER_SIZE = 2 * 1024 * 1024,
++	VERTEX_UNIFORM_BUFFER_SIZE = 1 * 1024 * 1024,
++	FRAGMENT_UNIFORM_BUFFER_SIZE = 1 * 1024 * 1024,
++	TEXTURE_BUFFER_SIZE = 16 * 1024 * 1024,
++#else
+ 	VERTEX_BUFFER_SIZE = 32 * 1024 * 1024,
+ 	INDEX_BUFFER_SIZE = 16 * 1024 * 1024,
+ 	VERTEX_UNIFORM_BUFFER_SIZE = 8 * 1024 * 1024,
+ 	FRAGMENT_UNIFORM_BUFFER_SIZE = 8 * 1024 * 1024,
+ 	TEXTURE_BUFFER_SIZE = 64 * 1024 * 1024,
++#endif
+ };
+ 
+ 
+@@ -865,6 +880,13 @@
+ 	ci.physicalDevice = m_physical_device;
+ 	ci.device = m_device;
+ 	ci.instance = m_instance;
++#ifdef CHIMERA_GUEST_VK
++	// chimera: small blocks. The allocator maps memory a whole block at a
++	// time, and through Chimera's Vulkan bridge every mapped byte is copied
++	// to the core when the mapping is made, whether a buffer uses it or not.
++	// Anything over half a block gets memory of exactly its own size.
++	ci.preferredLargeHeapBlockSize = 16 * 1024 * 1024;
++#endif
+ 
+ 	if (m_optional_extensions.vk_ext_memory_budget)
+ 		ci.flags |= VMA_ALLOCATOR_CREATE_EXT_MEMORY_BUDGET_BIT;
+@@ -2082,7 +2104,17 @@
+ 
+ 	const VkBufferCreateInfo cpu_bci = {VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, nullptr, 0, size,
+ 		VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_SHARING_MODE_EXCLUSIVE};
++#ifdef CHIMERA_GUEST_VK
++	// chimera: "CPU only" memory is asked to be coherent - to follow the
++	// device by itself - and through Chimera's Vulkan bridge no memory is:
++	// the bytes cross when they are flushed, which this function does. So it
++	// asks for memory the processor can map, and cached (VKStreamBuffer.cpp
++	// says why).
++	const VmaAllocationCreateInfo cpu_aci = {VMA_ALLOCATION_CREATE_MAPPED_BIT, VMA_MEMORY_USAGE_CPU_TO_GPU, 0,
++		VK_MEMORY_PROPERTY_HOST_CACHED_BIT};
++#else
+ 	const VmaAllocationCreateInfo cpu_aci = {VMA_ALLOCATION_CREATE_MAPPED_BIT, VMA_MEMORY_USAGE_CPU_ONLY, 0, 0};
++#endif
+ 	VkBuffer cpu_buffer;
+ 	VmaAllocation cpu_allocation;
+ 	VmaAllocationInfo cpu_ai;
+diff --git a/pcsx2/GS/Renderers/Vulkan/GSTextureVK.cpp b/pcsx2/GS/Renderers/Vulkan/GSTextureVK.cpp
+--- a/pcsx2/GS/Renderers/Vulkan/GSTextureVK.cpp
++++ b/pcsx2/GS/Renderers/Vulkan/GSTextureVK.cpp
+@@ -290,6 +290,11 @@
+ 	VmaAllocationCreateInfo aci = {};
+ 	aci.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT;
+ 	aci.usage = VMA_MEMORY_USAGE_CPU_TO_GPU;
++#ifdef CHIMERA_GUEST_VK
++	// chimera: cached memory, for the same reason as the stream buffers
++	// (VKStreamBuffer.cpp)
++	aci.preferredFlags = VK_MEMORY_PROPERTY_HOST_CACHED_BIT;
++#endif
+ 
+ 	VmaAllocationInfo ai;
+ 	VkBuffer buffer;
+@@ -948,6 +953,14 @@
+ 	{
+ 		u32 copy_offset, copy_size, copy_rows;
+ 		GetTransferSize(read_rc, &copy_offset, &copy_size, &copy_rows);
++#ifdef CHIMERA_GUEST_VK
++		// chimera: copy_size is the bytes of ONE row. On a desktop the memory
++		// follows the device by itself and how much is named here does not
++		// matter; through Chimera's Vulkan bridge exactly what is named is
++		// brought back, and a picture came back as its top row over black.
++		if (copy_rows > 1)
++			copy_size += (copy_rows - 1) * m_current_pitch;
++#endif
+ 		vmaInvalidateAllocation(GSDeviceVK::GetInstance()->GetAllocator(), m_allocation, copy_offset, copy_size);
+ 		m_needs_cache_invalidate = false;
+ 	}
+diff --git a/pcsx2/GS/Renderers/Vulkan/VKLoader.cpp b/pcsx2/GS/Renderers/Vulkan/VKLoader.cpp
+--- a/pcsx2/GS/Renderers/Vulkan/VKLoader.cpp
++++ b/pcsx2/GS/Renderers/Vulkan/VKLoader.cpp
+@@ -36,6 +36,49 @@
+ #undef VULKAN_MODULE_ENTRY_POINT
+ }
+ 
++#ifdef CHIMERA_GUEST_VK
++// chimera: there is no library to open in a sandbox. The functions are the
++// guest half of Chimera's Vulkan bridge, linked into the core, and found by
++// name (chimera_vk_lookup); each one hands its call to the frontend.
++extern "C" void* chimera_vk_lookup(const char* name);
++static bool s_chimera_vulkan_loaded = false;
++
++bool Vulkan::IsVulkanLibraryLoaded()
++{
++	return s_chimera_vulkan_loaded;
++}
++
++bool Vulkan::LoadVulkanLibrary(Error* error)
++{
++	bool required_functions_missing = false;
++#define VULKAN_MODULE_ENTRY_POINT(name, required) \
++	name = reinterpret_cast<PFN_##name>(chimera_vk_lookup(#name)); \
++	if (!name && required) \
++	{ \
++		ERROR_LOG("Vulkan: the bridge has no {}", #name); \
++		required_functions_missing = true; \
++	}
++
++#include "VKEntryPoints.inl"
++#undef VULKAN_MODULE_ENTRY_POINT
++
++	if (required_functions_missing)
++	{
++		ResetVulkanLibraryFunctionPointers();
++		Error::SetStringView(error, "Chimera's Vulkan bridge lacks a function this renderer cannot do without");
++		return false;
++	}
++
++	s_chimera_vulkan_loaded = true;
++	return true;
++}
++
++void Vulkan::UnloadVulkanLibrary()
++{
++	ResetVulkanLibraryFunctionPointers();
++	s_chimera_vulkan_loaded = false;
++}
++#else
+ static DynamicLibrary s_vulkan_library;
+ 
+ bool Vulkan::IsVulkanLibraryLoaded()
+@@ -92,6 +135,7 @@
+ 	ResetVulkanLibraryFunctionPointers();
+ 	s_vulkan_library.Close();
+ }
++#endif // CHIMERA_GUEST_VK
+ 
+ bool Vulkan::LoadVulkanInstanceFunctions(VkInstance instance)
+ {
+diff --git a/pcsx2/GS/Renderers/Vulkan/VKShaderCache.cpp b/pcsx2/GS/Renderers/Vulkan/VKShaderCache.cpp
+--- a/pcsx2/GS/Renderers/Vulkan/VKShaderCache.cpp
++++ b/pcsx2/GS/Renderers/Vulkan/VKShaderCache.cpp
+@@ -19,7 +19,29 @@
+ #include "common/Path.h"
+ 
+ #include "fmt/format.h"
++#ifdef CHIMERA_GUEST_VK
++// chimera: the GLSL this renderer writes has to become SPIR-V. Upstream asks
++// shaderc, a shared library it loads at run time; a sandbox loads nothing, so
++// glslang - the compiler shaderc is a wrapper of - is compiled into the core
++// and asked directly (CompileShaderToSPV, below). Without shaderc's
++// optimiser: the driver compiles the shaders again anyway.
++#include "SPIRV/GlslangToSpv.h"
++#include "glslang/Public/ResourceLimits.h"
++#include "glslang/Public/ShaderLang.h"
++
++#include <string>
++#include <unordered_map>
++
++// the stages the callers below name, numbered as shaderc numbers them
++enum : u32
++{
++	shaderc_glsl_vertex_shader = 0,
++	shaderc_glsl_fragment_shader = 1,
++	shaderc_glsl_compute_shader = 2,
++};
++#else
+ #include "shaderc/shaderc.h"
++#endif
+ 
+ #include <cstring>
+ #include <memory>
+@@ -100,6 +122,7 @@
+ 	std::memcpy(header->uuid, GSDeviceVK::GetInstance()->GetDeviceProperties().pipelineCacheUUID, VK_UUID_SIZE);
+ }
+ 
++#ifndef CHIMERA_GUEST_VK
+ #define SHADERC_FUNCTIONS(X) \
+ 	X(shaderc_compiler_initialize) \
+ 	X(shaderc_compiler_release) \
+@@ -191,6 +214,7 @@
+ 
+ #undef SHADERC_FUNCTIONS
+ #undef SHADERC_INIT_FUNCTIONS
++#endif // !CHIMERA_GUEST_VK
+ 
+ static void DumpBadShader(std::string_view code, std::string_view errors)
+ {
+@@ -206,6 +230,7 @@
+ 	}
+ }
+ 
++#ifndef CHIMERA_GUEST_VK
+ static const char* compilation_status_to_string(shaderc_compilation_status status)
+ {
+ 	switch (status)
+@@ -277,6 +302,74 @@
+ 	dyn_shaderc::shaderc_compile_options_release(options);
+ 	return ret;
+ }
++#else // CHIMERA_GUEST_VK
++std::optional<VKShaderCache::SPIRVCodeVector> VKShaderCache::CompileShaderToSPV(u32 stage, std::string_view source, bool debug)
++{
++	// What was compiled once is kept, by stage and source. After every
++	// savestate that is loaded the device is made again and asks for the same
++	// shaders; compiling them again would be most of what a load costs. The
++	// table is the core's own memory, so a state carries it.
++	static std::unordered_map<std::string, SPIRVCodeVector> s_compiled;
++	std::string key;
++	key.reserve(source.length() + 1);
++	key.push_back(static_cast<char>('0' + stage));
++	key.append(source);
++	if (const auto it = s_compiled.find(key); it != s_compiled.end())
++		return it->second;
++
++	const GSShaderCompileIndicator::CompileTimer compile_timer;
++
++	static bool s_glslang_started = false;
++	if (!s_glslang_started)
++	{
++		glslang::InitializeProcess();
++		s_glslang_started = true;
++	}
++
++	const EShLanguage kind = (stage == shaderc_glsl_vertex_shader) ? EShLangVertex :
++	                         ((stage == shaderc_glsl_fragment_shader) ? EShLangFragment : EShLangCompute);
++	const char* const text = source.data();
++	const int length = static_cast<int>(source.length());
++	const EShMessages messages = static_cast<EShMessages>(EShMsgSpvRules | EShMsgVulkanRules);
++
++	glslang::TShader shader(kind);
++	shader.setStringsWithLengths(&text, &length, 1);
++	shader.setEnvInput(glslang::EShSourceGlsl, kind, glslang::EShClientVulkan, 100);
++	shader.setEnvClient(glslang::EShClientVulkan, glslang::EShTargetVulkan_1_0);
++	shader.setEnvTarget(glslang::EShTargetSpv, glslang::EShTargetSpv_1_0);
++	if (!shader.parse(GetDefaultResources(), 110, false, messages))
++	{
++		const std::string_view errors(shader.getInfoLog());
++		ERROR_LOG("Failed to compile shader to SPIR-V:\n{}", errors);
++		DumpBadShader(source, errors);
++		return std::nullopt;
++	}
++
++	glslang::TProgram program;
++	program.addShader(&shader);
++	if (!program.link(messages))
++	{
++		const std::string_view errors(program.getInfoLog());
++		ERROR_LOG("Failed to link shader for SPIR-V:\n{}", errors);
++		DumpBadShader(source, errors);
++		return std::nullopt;
++	}
++
++	std::vector<unsigned int> words;
++	glslang::SpvOptions options;
++	options.disableOptimizer = true;
++	glslang::GlslangToSpv(*program.getIntermediate(kind), words, &options);
++	if (words.empty())
++	{
++		ERROR_LOG("glslang wrote no SPIR-V for a shader it accepted");
++		return std::nullopt;
++	}
++
++	SPIRVCodeVector code(words.begin(), words.end());
++	s_compiled.emplace(std::move(key), code);
++	return code;
++}
++#endif // CHIMERA_GUEST_VK
+ 
+ VKShaderCache::VKShaderCache() = default;
+ 
+@@ -315,7 +408,9 @@
+ {
+ 	if (!GSConfig.DisableShaderCache)
+ 	{
++#ifndef CHIMERA_GUEST_VK
+ 		m_pipeline_cache_filename = GetPipelineCacheBaseFileName(GSConfig.UseDebugDevice);
++#endif
+ 
+ 		const std::string base_filename = GetShaderCacheBaseFileName(GSConfig.UseDebugDevice);
+ 		const std::string index_filename = base_filename + ".idx";
+@@ -324,8 +419,16 @@
+ 		if (!ReadExistingShaderCache(index_filename, blob_filename))
+ 			CreateNewShaderCache(index_filename, blob_filename);
+ 
++#ifdef CHIMERA_GUEST_VK
++		// No file for the driver's pipeline cache: what a driver writes there is
++		// that computer's, and a file of the machine is part of every savestate.
++		// It is also asked for when the device closes, which after a savestate
++		// is loaded is a device that is no longer there to answer.
++		CreateNewPipelineCache();
++#else
+ 		if (!ReadExistingPipelineCache())
+ 			CreateNewPipelineCache();
++#endif
+ 	}
+ 	else
+ 	{
+diff --git a/pcsx2/GS/Renderers/Vulkan/VKStreamBuffer.cpp b/pcsx2/GS/Renderers/Vulkan/VKStreamBuffer.cpp
+--- a/pcsx2/GS/Renderers/Vulkan/VKStreamBuffer.cpp
++++ b/pcsx2/GS/Renderers/Vulkan/VKStreamBuffer.cpp
+@@ -60,7 +60,16 @@
+ 	VmaAllocationCreateInfo aci = {};
+ 	aci.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT;
+ 	aci.usage = VMA_MEMORY_USAGE_CPU_TO_GPU;
++#ifdef CHIMERA_GUEST_VK
++	// chimera: memory the processor reads at speed. Through Chimera's Vulkan
++	// bridge a mapping is a copy on the core's side, and the bridge reads the
++	// whole of it once when it is made; from the write-combined memory a
++	// "write only" buffer is given on a desktop, that read takes about a
++	// second on an NVIDIA card - and a device is made again after every load.
++	aci.preferredFlags = VK_MEMORY_PROPERTY_HOST_CACHED_BIT;
++#else
+ 	aci.preferredFlags = VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
++#endif
+ 
+ 	VmaAllocationInfo ai = {};
+ 	VkBuffer new_buffer = VK_NULL_HANDLE;

@@ -128,7 +128,25 @@ gs_srcs() {
 		find "$p/pcsx2/GS/Renderers/OpenGL" -name '*.cpp' \
 			| grep -v -e "GLContextEGL" -e "GLContextWGL"
 		echo "$p/3rdparty/glad/src/gl.c"
+		# The Vulkan renderer, with the same hardware renderer above it. It
+		# has no softpipe behind it: it draws through Chimera's Vulkan bridge
+		# on the computer's graphics card, or it is not used (the Renderer
+		# setting's "vulkan-hw"). The swap chain is compiled because the
+		# device names it, and never made - a core has no window.
+		find "$p/pcsx2/GS/Renderers/Vulkan" -name '*.cpp'
 	fi
+}
+
+# glslang, which turns the GLSL PCSX2 writes for Vulkan into SPIR-V. Upstream
+# reaches it through shaderc, loaded as a shared library at run time; a
+# sandbox loads nothing, so the compiler itself is compiled in - the front end
+# and the SPIR-V writer, without the optimiser (SPIRV-Tools) and without HLSL.
+glslang_srcs() {
+	g="extern/glslang"
+	find "$g/glslang/MachineIndependent" "$g/glslang/GenericCodeGen" -name '*.cpp' | sort
+	echo "$g/glslang/OSDependent/Unix/ossource.cpp"
+	echo "$g/glslang/ResourceLimits/ResourceLimits.cpp"
+	find "$g/SPIRV" -maxdepth 1 -name '*.cpp' | grep -v -e "/SpvTools.cpp$" | sort
 }
 
 # common/ is PCSX2's own utility library: files, threads, memory, strings.
@@ -185,5 +203,6 @@ deps_srcs() {
 case "${1:-main}" in
 	main) { core_srcs; gs_srcs; common_srcs; } | sort ;;
 	deps) deps_srcs | sort ;;
-	*) echo "usage: sources.sh [main|deps]" >&2; exit 2 ;;
+	glslang) glslang_srcs ;;
+	*) echo "usage: sources.sh [main|deps|glslang]" >&2; exit 2 ;;
 esac

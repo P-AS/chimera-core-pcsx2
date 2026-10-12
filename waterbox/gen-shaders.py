@@ -15,7 +15,9 @@ import sys
 
 # The OpenGL renderer's own shaders, and the ones it shares with the other
 # backends (FXAA lives there).
-WANTED = ["shaders/opengl", "shaders/common"]
+# ...and the Vulkan renderer's, which the same hardware renderer uses when
+# the Renderer setting is "vulkan-hw".
+WANTED = ["shaders/opengl", "shaders/vulkan", "shaders/common"]
 
 src_root = sys.argv[1]
 out_path = sys.argv[2]
@@ -24,7 +26,9 @@ found = []
 for rel in WANTED:
     d = os.path.join(src_root, rel)
     for n in sorted(os.listdir(d)):
-        if n.endswith(".glsl") or n.endswith(".fx"):
+        # (.h: the two FidelityFX headers the Vulkan renderer pastes into its
+        # sharpening shader - it stops if it cannot read them)
+        if n.endswith(".glsl") or n.endswith(".fx") or n.endswith(".h"):
             found.append((rel, n, os.path.join(d, n)))
 
 out = [

@@ -86,6 +86,45 @@ static void gl_state_loaded(void) { }
 static void gl_report_unhandled(void) { }
 #endif
 
+/* The Vulkan bridge's host half (miniBox source/vk/vk-host.c), handed over
+ * beside the OpenGL one when CHIMERA_GPU asks for a card: the core uses the
+ * one its renderer setting names, as it does in the frontend. A computer
+ * with no Vulkan loses the vulkan-hw renderer and nothing else. */
+#ifdef CHIMERA_VK_BRIDGE
+int chimera_vk_host_init(char *err, int errlen);
+uintptr_t chimera_vk_host_dispatch(uintptr_t op, uintptr_t a, uintptr_t b, uintptr_t c, uintptr_t d, uintptr_t e);
+void chimera_vk_host_state_loaded(void);
+void chimera_vk_host_shutdown(void);
+const char *chimera_vk_host_description(void);
+unsigned long chimera_vk_host_refused(long *last_op);
+static int g_vulkan;
+
+static void vk_state_loaded(void)
+{
+	if (g_vulkan)
+		chimera_vk_host_state_loaded();
+}
+
+/* A refused command is one sent with an object the host does not know - of a
+ * device a load destroyed, as a rule. The gate fails on it. */
+static void vk_report_refused(void)
+{
+	long last = 0;
+	if (!g_vulkan) return;
+	const char *card = chimera_vk_host_description();
+	if (card && card[0])
+		fprintf(stderr, "vulkan bridge: %s\n", card);
+	const unsigned long n = chimera_vk_host_refused(&last);
+	if (n)
+		fprintf(stderr, "vulkan bridge: %lu calls were refused (last opcode %ld)\n", n, last);
+	chimera_vk_host_shutdown();
+	fflush(stderr);
+}
+#else
+static void vk_state_loaded(void) { }
+static void vk_report_refused(void) { }
+#endif
+
 static intfn g_Init;
 static ptrfn g_GetLoadError;
 static setfn g_SetButton;
@@ -114,6 +153,15 @@ static uintptr_t proc(mb_host *h, const char *n)
 	if (r.error_message[0]) { fprintf(stderr, "proc %s: %s\n", n, r.error_message); exit(2); }
 	if (!r.data) { fprintf(stderr, "missing required export %s\n", n); exit(2); }
 	return r.data;
+}
+
+/* an export a core may not have: 0 when it has not */
+static uintptr_t proc_optional(mb_host *h, const char *n)
+{
+	mb_return r;
+	wbx_get_proc_addr(h, n, &r);
+	if (r.error_message[0]) { fprintf(stderr, "proc %s: %s\n", n, r.error_message); exit(2); }
+	return (uintptr_t)r.data;
 }
 
 static int core_init(void) { return g_Init(); }
@@ -146,18 +194,31 @@ static const char *core_domain_name(int i) { return (const char *)g_GetMemoryDom
 static const uint8_t *core_domain_ptr(int i) { return (const uint8_t *)g_GetMemoryDomainPtr(i); }
 static int64_t core_domain_size(int i) { return g_GetMemoryDomainSize(i); }
 
+/* The two things Chimera's engine tells a core around a state, and so this
+ * runner does: that one is about to be taken (the core brings into its memory
+ * what only the graphics card holds), and that one was loaded (what the core
+ * believes about the card's objects is no longer so). Without the second, the
+ * load before the very first frame went unnoticed - the core had not yet
+ * looked at which context it was on - and under Vulkan the frame after it was
+ * drawn on a device that no longer existed. */
+typedef void (MB_GUEST_ABI *state_told_fn)(void);
+static state_told_fn g_StateSaving, g_StateLoaded;
+
 static void core_pre_frame(void)
 {
 	if (!g_rerecord)
 		return;
 	mb_return r;
 	g_state.len = 0;
+	if (g_StateSaving && !getenv("CHIMERA_NO_STATE_SAVING")) g_StateSaving();
 	wbx_save_state(g_host, mem_write, (uintptr_t)&g_state, &r);
 	if (r.error_message[0]) { fprintf(stderr, "save_state: %s\n", r.error_message); exit(1); }
 	g_state.pos = 0;
 	wbx_load_state(g_host, mem_read, (uintptr_t)&g_state, &r);
 	if (r.error_message[0]) { fprintf(stderr, "load_state: %s\n", r.error_message); exit(1); }
 	gl_state_loaded();
+	vk_state_loaded();
+	if (g_StateLoaded) g_StateLoaded();
 }
 
 int main(int argc, char **argv)
@@ -233,6 +294,8 @@ int main(int argc, char **argv)
 	g_SetButton = (setfn)proc(g_host, "SetButton");
 	g_SetAxis = (setfn)proc(g_host, "SetAxis");
 	g_FrameAdvance = (framefn)proc(g_host, "FrameAdvance");
+	g_StateSaving = (state_told_fn)proc_optional(g_host, "StateSaving");
+	g_StateLoaded = (state_told_fn)proc_optional(g_host, "StateLoaded");
 	g_SetRenderingEnabled = (voidfn_i)proc(g_host, "SetRenderingEnabled");
 	g_GetVideoBgra = (ptrfn)proc(g_host, "GetVideoBgra");
 	g_GetVideoWidth = (intfn)proc(g_host, "GetVideoWidth");
@@ -285,6 +348,39 @@ int main(int argc, char **argv)
 		}
 	}
 #endif
+#ifdef CHIMERA_VK_BRIDGE
+	{
+		const char *want = getenv("CHIMERA_GPU");
+		if (want && strcmp(want, "0") != 0)
+		{
+			char vkerr[256] = "";
+			typedef void (*setvk_fn)(uint64_t);
+			setvk_fn set_vulkan = (setvk_fn)proc_optional(g_host, "SetVulkanBridge");
+			if (!set_vulkan)
+			{
+				/* a core built without the Vulkan renderer */
+			}
+			else if (chimera_vk_host_init(vkerr, sizeof vkerr) != 0)
+			{
+				fprintf(stderr, "vulkan bridge: %s\n", vkerr);
+			}
+			else
+			{
+				mb_return vr;
+				wbx_get_callback_addr(g_host, (mb_external_callback)chimera_vk_host_dispatch, 2, &vr);
+				if (!vr.data)
+				{
+					fprintf(stderr, "vulkan bridge: could not register the callback\n");
+				}
+				else
+				{
+					set_vulkan((uint64_t)vr.data);
+					g_vulkan = 1;
+				}
+			}
+		}
+	}
+#endif
 
 	struct gate_core c = {
 		.init = core_init,
@@ -324,6 +420,7 @@ int main(int argc, char **argv)
 	c.init = core_init_done;
 	int ret = gate_run(&c, &o);
 	gl_report_unhandled();
+	vk_report_refused();
 
 	wbx_deactivate_host(g_host, &r);
 	wbx_destroy_host(g_host, &r);

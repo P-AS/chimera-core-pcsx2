@@ -76,8 +76,9 @@ sudo apt-get install -y --no-install-recommends \
   `meson ninja mako packaging` into it with pip. With the apt packages above
   the system meson is used and no venv is made.
 - miniBox builds the guest C and C++ toolchain from the Chimera submodule.
-- Everything else is source: this repository and its four submodules,
-  `extern/pcsx2`, `extern/zlib`, `extern/zstd` and `extern/lz4`. PCSX2's
+- Everything else is source: this repository and its five submodules,
+  `extern/pcsx2`, `extern/zlib`, `extern/zstd`, `extern/lz4` and
+  `extern/glslang` (the shader compiler of the Vulkan renderer). PCSX2's
   per-title database and its GLSL shaders are compiled into the core from the
   `extern/pcsx2` submodule at build time (`waterbox/gen-gamedb.py`,
   `waterbox/gen-shaders.py`).
@@ -200,8 +201,11 @@ Two more options exist for the native build (`meson_options.txt`). CI sets
 neither:
 
 - `-Dgl_bridge=true` builds the host half of the GPU bridge
-  (`waterbox/gl-host.c`) into `run-wbx`. It needs the EGL library. Two gate
-  legs use it.
+  (`waterbox/gl-host.c`) into `run-wbx`, and with it the host half of
+  miniBox's Vulkan bridge. It needs the EGL library to build. Vulkan is
+  looked for when a run starts, so a computer without it still builds and
+  runs, and the Vulkan checks say SKIP there. The checks named `gpu:` and
+  `vk:` use it.
 - `-Djit_rasterizer=true` makes a diagnostic reference that draws the
   software renderer's scanlines with PCSX2's code generator instead of the
   C++ path the core ships. One gate leg compares the two; it looks for that
@@ -225,10 +229,15 @@ ninja -C build/meson-guest
 - With it: PCSX2's OpenGL renderer is built and linked against the guest
   Mesa, its shaders are compiled in, and the guest half of Chimera's GPU
   bridge is generated (miniBox's `source/gl/gen-gl-bridge.py`, from
-  `waterbox/gl-entry-points.txt`) and compiled in. The core then offers three
-  renderers: `software`, `opengl` (softpipe, inside the sandbox) and
-  `opengl-hw` (the same renderer with its calls leaving the sandbox to the
-  host's GPU through the bridge).
+  `waterbox/gl-entry-points.txt`) and compiled in. PCSX2's Vulkan renderer is
+  built with it: its shaders are compiled in, glslang (`extern/glslang`, a
+  submodule) is compiled in to turn them into SPIR-V, and the guest half of
+  Chimera's Vulkan bridge is generated (miniBox's `source/vk/gen-vk-bridge.py`)
+  and linked. The core then offers four renderers: `software`, `opengl`
+  (softpipe, inside the sandbox), `opengl-hw` (the same renderer with its
+  calls leaving the sandbox to the host's GPU through the bridge) and
+  `vulkan-hw` (the Vulkan renderer, on the host's GPU through the Vulkan
+  bridge).
 - Without it: only PCSX2's software renderer is built.
 
 ## Build the package
@@ -339,6 +348,9 @@ distribute) it also runs `pad:*` and `gun:bus`, `gun:controls`,
 | `gun:aims` | `PCSX2_GUN_DISC`, a GunCon 2 disc |
 | `gpu:picture` | `PCSX2_GFX_DISC` (and `PCSX2_GFX_FRAMES`), `run-wbx` built with `-Dgl_bridge=true`, and a GL context |
 | `gpu:bridge` | `run-wbx` built with `-Dgl_bridge=true`, a GL context, and a core built with the guest Mesa |
+| `vk:bridge`, `vk:machine`, `vk:picture`, `vk:rerecord` | the same `run-wbx`, and a Vulkan driver on this computer (Mesa's lavapipe will do: the packages `libvulkan1` and `mesa-vulkan-drivers`) |
+| `vk:settings` | `PCSX2_GFX_DISC` as for `gpu:picture`, and a Vulkan driver |
+| `vk:picture-after-load` | `chimera-run` and the installed package as for `gl:rebuild-at-zero`, from a Chimera at commit 4ca6e30 or later, and a Vulkan driver |
 | `ports:columns`, `gl:rebuild-at-zero` | `<chimera>/build/meson-linux/chimera-run` and the installed `<chimera>/build/Cores/pcsx2.chimeraCore`; found through `$CHIMERA_ROOT`, then `chimera-checkout/`, `../../chimera`, `../chimera`, `$HOME/chimera` |
 
 **The arcade boards** carry their own bios, so their checks do not need the
@@ -420,10 +432,13 @@ The user provides them. `waterbox/file_slots.json` and the `firmware` list in
 - Boot program: one file (`.elf` or `.bin`).
 - Save data, optional: `sram.bin`, the board's settings memory.
 
-The `renderer` setting has three values. `software` (the default) and
+The `renderer` setting has four values. `software` (the default) and
 `opengl` run inside the sandbox and are deterministic. `opengl-hw` sends the
-OpenGL calls to the host's GPU through Chimera's GPU bridge; it is the fastest
-where there is a GPU, and its picture is not deterministic.
+OpenGL calls to the host's GPU through Chimera's GPU bridge, and `vulkan-hw`
+sends PCSX2's Vulkan renderer's calls there through Chimera's Vulkan bridge;
+they are the fastest where there is a GPU, and their picture is not
+deterministic. `vulkan-hw` needs a Chimera from commit 4ca6e30 on, and
+refuses to start where no Vulkan is handed over.
 
 ## Troubleshooting
 

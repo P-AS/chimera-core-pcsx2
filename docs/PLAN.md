@@ -867,6 +867,100 @@ longer happens.
 With the saved NVRAM mounted back, the console skips its setup screens and goes
 straight to the browser. Guest and native produce the same kilobyte.
 
+## The Vulkan renderer (user-decided, 2026-10-11, chimera#248)
+
+The owner decided that every core whose emulator has a Vulkan renderer offers
+it. Here that is a fourth value of the Renderer setting, `vulkan-hw`: PCSX2's
+Vulkan renderer, drawing on the computer's graphics card through Chimera's
+Vulkan bridge. The default did not change. It has nothing to fall back on: on
+a computer that hands no Vulkan over, Init refuses and says why.
+
+What it took (patch 0027, six files of PCSX2, and the adapter):
+
+- **The functions.** Upstream opens the Vulkan library and asks it for each
+  function. The bridge's guest half is linked into the core instead, and
+  `VKLoader.cpp` asks it by name.
+- **The shader compiler.** The renderer writes GLSL and needs SPIR-V.
+  Upstream asks shaderc, a shared library loaded at run time; a sandbox loads
+  nothing, so glslang - the compiler shaderc wraps - is a submodule
+  (`extern/glslang`, 14.3.0), compiled in without its optimiser and without
+  HLSL, and asked directly. What it compiles is kept by source, because the
+  device is made again after every load and asks for the same shaders. The
+  shaders themselves, and the two FidelityFX headers they include, are
+  compiled into the core (`waterbox/gen-shaders.py`).
+- **Push descriptors.** PCSX2 hands a draw its textures with
+  `vkCmdPushDescriptorSetKHR`. Chimera's bridge carries that command from
+  miniBox a348f60 (Chimera 4ca6e30) on; a core built against that list is
+  refused the bridge by an older Chimera, and then says so at Init.
+- **No window.** The frame is fetched with PCSX2's own download texture
+  (`ChimeraGSDownload` in `waterbox/gs-device.cpp`), where the OpenGL path
+  asks the driver for the texture's pixels.
+- **Memory.** Through the bridge every mapped byte is a byte of the core's
+  memory, copied when the mapping is made, and no memory type is coherent:
+  what is written has to be flushed and what is read invalidated. Upstream
+  flushes, and invalidated one row of a download where it reads them all
+  (the picture was black until that was all rows). Buffers that are read or
+  written through a mapping ask for cached memory, not write-combined. And
+  less is mapped: the stream buffers have the OpenGL device's sizes (24 MiB
+  in all against 128), and the allocator's blocks are 16 MiB.
+- **A load.** A load is a new Vulkan device. The adapter's check
+  (`ChimeraCheckGLContext`, now for either bridge) rebuilds the GS device as
+  it does for OpenGL. While PCSX2 lets go of the old device none of its
+  commands cross the bridge (the adapter's `ChimeraVulkanBridge` answers
+  "done"), and `CloseGSDevice` says when the old device is gone
+  (`ChimeraOldDeviceGone`). The render targets and the deinterlacer's fields
+  are copied into the core's memory before a state and given back after a
+  load by the same code as for OpenGL (`waterbox/gs-shadow.cpp`), which
+  downloads and uploads through PCSX2's device where it used OpenGL calls.
+- **No pipeline cache file.** Upstream writes the driver's pipeline cache to
+  a file when the device closes. In a sandbox that file is part of every
+  state and its bytes are that computer's driver's; and after a load the
+  device that would answer is gone - the size was never filled in, and the
+  core asked for 3,600,431 MiB and died. The Chimera build keeps the cache
+  in memory only.
+
+The core's own sandbox runner (`run-wbx`) now tells the core before each
+state and after each load (`StateSaving`, `StateLoaded`), as the frontend
+does. It did not, and a load before the first frame went unnoticed.
+
+Measured on Mesa's lavapipe (2026-10-12):
+
+- padtest.elf, 300 frames: the five memory domains, the sound and the lag
+  count are the software renderer's, and no pixel of frame 300 differs from
+  OpenGL's by more than 8 levels of 255. A state saved and loaded around
+  every frame is the straight run, picture included, with no command refused.
+- Maximo: Ghosts to Glory, 2400 frames from power-on: the machine is the one
+  OpenGL ran; 18,177 of 1,146,880 bytes of the last picture differ, 2 of
+  them by more than 8 levels. A state saved and loaded around every one of
+  the 2400 frames is the straight run, picture included (617 s against 18).
+  Texture filtering, FXAA and 2x internal resolution each change the picture
+  and not the machine.
+- Six frames drawn right after a load are bit for bit the pictures they
+  were; with the core left untold before the state, three of the six are
+  not.
+
+Measured on a GeForce GTX 1060 (Windows, driver 581.42, Vulkan 1.4.312)
+through chimera-run.exe, with no input, from power-on:
+
+- Street Fighter EX3, 3700 frames (frame 3699 is in a fight): 13.6 s with
+  Vulkan, 13.8 s with OpenGL. EE RAM is identical, and no pixel of frame
+  3699 differs by more than 8 levels. With every frame fetched: 16.6 s
+  against 19.0 s. At 2x: 12.6 s against 12.7 s, EE RAM still identical, 508
+  of 1,146,880 pixels differ by more than 8 levels.
+- Twelve frames drawn after a load, compared with the frames first drawn:
+  all twelve exact on Street Fighter EX3 at frame 3600, Marvel vs. Capcom 2
+  at 3600 and Maximo at 2400 and 4200. With the core left untold, the first
+  four are wrong on each.
+- Street Fighter EX3, eight times back from frame 3700 to 3450 and forward
+  again: the last picture and EE RAM are the straight run's, byte for byte.
+  It took 30.2 s against 28.0 s with OpenGL (15.5 s and 15.2 s without the
+  going back): a load costs about a quarter of a second more with Vulkan,
+  of which making the device is 44 ms.
+
+Not measured: a game played with input, anything above 2x, and any card other
+than this one. `vk:` checks in the test script run on lavapipe, which is not a
+graphics card.
+
 ## What is known to be wrong, and is next
 
 - **Only one disc format is tested**: a raw 2352-byte-sector CD. CHD and CSO

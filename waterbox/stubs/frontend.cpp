@@ -198,4 +198,9 @@ namespace ImGuiFreeType
 namespace BuildVersion
 {
 	const char* GitRev = "chimera";
+	// the three numbers the Vulkan renderer tells the driver its application
+	// version is: constants, so that two builds of one commit are one package
+	int GitTagHi = 0;
+	int GitTagMid = 0;
+	int GitTagLo = 0;
 } // namespace BuildVersion

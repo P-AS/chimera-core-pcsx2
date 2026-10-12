@@ -125,9 +125,9 @@ Linux and on Windows.
 - **Determinism is the product.** The guest must not read host time, host
   randomness or anything else that differs between runs, and a savestate
   must round-trip. The gate checks both when it has a bios; a change that
-  breaks either is a bug. Only the `opengl-hw` renderer is declared
-  non-deterministic (`waterbox.config`): its picture comes from the host's
-  GPU.
+  breaks either is a bug. Only the `opengl-hw` and `vulkan-hw` renderers
+  are declared non-deterministic (`waterbox.config`): their picture comes
+  from the host's GPU.
 - **Run the gate before committing.** A new check needs a negative control:
   show that it fails when the thing it checks is broken.
 - **Never commit game files, BIOS or firmware.** `tests/roms/` is ignored

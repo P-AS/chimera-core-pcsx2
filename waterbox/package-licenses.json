@@ -96,6 +96,28 @@
       "url": "https://github.com/lz4/lz4",
       "commit": "{submodule:extern/lz4}",
       "file": "extern/lz4/LICENSE"
+    },
+    {
+      "name": "glslang",
+      "license": "BSD-3-Clause, BSD-2-Clause, MIT and Apache-2.0, with its generated parser under GPL-3.0 with the Bison exception",
+      "url": "https://github.com/KhronosGroup/glslang",
+      "commit": "{submodule:extern/glslang}",
+      "file": "extern/glslang/LICENSE.txt",
+      "note": "The compiler that turns the GLSL PCSX2 writes for its Vulkan renderer into SPIR-V. Its front end and SPIR-V writer are compiled in, without the optimiser and without HLSL. Used only when the Renderer setting is vulkan-hw."
+    },
+    {
+      "name": "Vulkan Memory Allocator",
+      "license": "MIT",
+      "url": "https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator",
+      "file": "extern/pcsx2/3rdparty/vulkan/include/LICENSE.txt",
+      "note": "One header, carried in PCSX2's tree (3rdparty/vulkan/include/vk_mem_alloc.h) beside the Khronos Vulkan headers (Apache-2.0 or MIT) it is compiled against."
+    },
+    {
+      "name": "AMD FidelityFX Contrast Adaptive Sharpening",
+      "license": "MIT",
+      "url": "https://github.com/GPUOpen-Effects/FidelityFX-CAS",
+      "file": "extern/pcsx2/bin/resources/shaders/common/ffx_cas.h",
+      "note": "Two shader headers (ffx_a.h, ffx_cas.h) from PCSX2's resources, which its Vulkan renderer includes in the shaders it compiles. Their licence is the comment at the top of each."
     }
   ]
 }

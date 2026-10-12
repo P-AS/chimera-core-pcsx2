@@ -75,6 +75,17 @@
 /* the "verbose" setting (cinterface.cpp owns it) */
 extern "C" int chimera_gs_trace;
 
+/* UNDER THE VULKAN RENDERER the same is done with PCSX2's own means and no
+ * Vulkan call of this file's: a target is read with the device's download
+ * texture (gs-device.cpp, ChimeraGSDownload) and put back with the texture's
+ * Update - or, for a depth target, which cannot be uploaded to, by uploading
+ * its values to a float texture and drawing that into it with PCSX2's depth
+ * copy. A record's format field then holds PCSX2's format, marked so that it
+ * is never taken for an OpenGL one. Depth comes back as depth alone: the
+ * stencil beside it is scratch within one draw and is not carried. */
+const u8* ChimeraGSDownload(GSTexture* tex, int width, int height, u32* pitch);
+void ChimeraGSDropDownloads();
+
 namespace
 {
 	constexpr u64 SHADOW_MAGIC = 0x3253504753584843ull; // "CHXSGPS2"
@@ -171,11 +182,81 @@ namespace
 		}
 	}
 
+	bool OnVulkan()
+	{
+		return g_gs_device && g_gs_device->GetRenderAPI() == RenderAPI::Vulkan;
+	}
+
 	void DrainErrors()
 	{
+		if (OnVulkan())
+			return;
 		while (glGetError() != GL_NO_ERROR)
 		{
 		}
+	}
+
+	/* Vulkan: what a record's format field holds, and the formats carried. */
+	constexpr u32 VK_RECORD = 0x80000000u;
+
+	bool VkLossless(GSTexture::Format format, u32* texel_bytes)
+	{
+		switch (format)
+		{
+			case GSTexture::Format::Color:
+			case GSTexture::Format::ColorHQ:
+			case GSTexture::Format::ColorHDR:
+			case GSTexture::Format::ColorClip:
+			case GSTexture::Format::DepthStencil:
+			case GSTexture::Format::DepthColor:
+			case GSTexture::Format::UNorm8:
+			case GSTexture::Format::UInt16:
+			case GSTexture::Format::UInt32:
+			case GSTexture::Format::PrimID:
+				*texel_bytes = GSTexture::GetCompressedBytesPerBlock(format);
+				return true;
+			default:
+				return false;
+		}
+	}
+
+	/* The same as CopyOut, through the device's download texture. */
+	bool VkCopyOut(GSTexture* tex, u32 texel_bytes, u8* at)
+	{
+		const int width = tex->GetWidth();
+		const int height = tex->GetHeight();
+		u32 pitch = 0;
+		const u8* const rows = ChimeraGSDownload(tex, width, height, &pitch);
+		if (!rows)
+			return false;
+		const size_t row_bytes = static_cast<size_t>(width) * texel_bytes;
+		for (int y = 0; y < height; y++)
+		{
+			const u8* const src = rows + static_cast<size_t>(y) * pitch;
+			u8* const dst = at + row_bytes * y;
+			if (std::memcmp(dst, src, row_bytes) != 0)
+				std::memcpy(dst, src, row_bytes);
+		}
+		return true;
+	}
+
+	/* A record's pixels into a texture of the new device. */
+	bool VkPutBack(GSTexture* made, const ShadowRecord& rec, u32 texel_bytes, const u8* pixels)
+	{
+		const GSVector4i all(0, 0, rec.width, rec.height);
+		const int pitch = static_cast<int>(rec.width * texel_bytes);
+		if (!made->IsDepthStencil())
+			return made->Update(all, pixels, pitch);
+
+		GSTexture* const values = g_gs_device->CreateTexture(rec.width, rec.height, 1, GSTexture::Format::DepthColor);
+		if (!values)
+			return false;
+		const bool ok = values->Update(all, pixels, pitch);
+		if (ok)
+			g_gs_device->StretchRect(values, made, GSVector4(0.0f, 0.0f, static_cast<float>(rec.width), static_cast<float>(rec.height)),
+				ShaderConvert::DEPTH_COPY, Filter::Nearest);
+		g_gs_device->Recycle(values);
+		return ok;
 	}
 
 	/* A texture's pixels against what the block holds at `at`, band by band;
@@ -234,33 +315,50 @@ struct ChimeraGSShadow
 			return;
 		GSDevice* const dev = g_gs_device.get();
 
+		const bool vulkan = OnVulkan();
 		GLint pack_buffer = 0, pack_alignment = 4, pack_row_length = 0;
-		glGetIntegerv(GL_PIXEL_PACK_BUFFER_BINDING, &pack_buffer);
-		glGetIntegerv(GL_PACK_ALIGNMENT, &pack_alignment);
-		glGetIntegerv(GL_PACK_ROW_LENGTH, &pack_row_length);
-		if (pack_buffer != 0)
-			glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
-		glPixelStorei(GL_PACK_ALIGNMENT, 1);
-		glPixelStorei(GL_PACK_ROW_LENGTH, 0);
-		DrainErrors();
+		if (!vulkan)
+		{
+			glGetIntegerv(GL_PIXEL_PACK_BUFFER_BINDING, &pack_buffer);
+			glGetIntegerv(GL_PACK_ALIGNMENT, &pack_alignment);
+			glGetIntegerv(GL_PACK_ROW_LENGTH, &pack_row_length);
+			if (pack_buffer != 0)
+				glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+			glPixelStorei(GL_PACK_ALIGNMENT, 1);
+			glPixelStorei(GL_PACK_ROW_LENGTH, 0);
+			DrainErrors();
+		}
 
 		u32 count = 0;
 		u64 end = 0;
 		const auto add = [&](u64 owner, GSTexture* texture) {
 			if (!texture || count == SHADOW_MAX_RECORDS)
 				return;
-			GSTextureOGL* const tex = static_cast<GSTextureOGL*>(texture);
+			GSTexture* const tex = texture;
 			GLenum format = 0, type = 0;
 			u32 texel_bytes = 0;
-			if (tex->GetWidth() <= 0 || tex->GetHeight() <= 0 || !Lossless(tex->GetGLFormat(), &format, &type, &texel_bytes))
+			u32 held_as = 0;
+			if (tex->GetWidth() <= 0 || tex->GetHeight() <= 0)
 				return;
+			if (vulkan)
+			{
+				if (!VkLossless(tex->GetFormat(), &texel_bytes))
+					return;
+				held_as = VK_RECORD | static_cast<u32>(tex->GetFormat());
+			}
+			else
+			{
+				held_as = static_cast<GSTextureOGL*>(tex)->GetGLFormat();
+				if (!Lossless(held_as, &format, &type, &texel_bytes))
+					return;
+			}
 
 			ShadowRecord rec = {};
 			rec.owner = owner;
 			rec.offset = end;
 			rec.width = tex->GetWidth();
 			rec.height = tex->GetHeight();
-			rec.gl_format = tex->GetGLFormat();
+			rec.gl_format = held_as;
 			rec.usage = static_cast<u32>(tex->GetUsage());
 			rec.format = static_cast<u32>(tex->GetFormat());
 			rec.state = static_cast<u32>(tex->GetState());
@@ -274,7 +372,8 @@ struct ChimeraGSShadow
 				const u64 bytes = static_cast<u64>(rec.width) * rec.height * texel_bytes;
 				if (end + bytes > SHADOW_PIXEL_BYTES)
 					return;
-				if (!CopyOut(tex, format, type, texel_bytes, Pixels() + end))
+				if (vulkan ? !VkCopyOut(tex, texel_bytes, Pixels() + end) :
+				             !CopyOut(static_cast<GSTextureOGL*>(tex), format, type, texel_bytes, Pixels() + end))
 					return;
 				rec.bytes = bytes;
 				end += bytes;
@@ -305,10 +404,13 @@ struct ChimeraGSShadow
 		if (current == OWNER_BLEND)
 			add(OWNER_BLEND, dev->m_blend);
 
-		glPixelStorei(GL_PACK_ALIGNMENT, pack_alignment);
-		glPixelStorei(GL_PACK_ROW_LENGTH, pack_row_length);
-		if (pack_buffer != 0)
-			glBindBuffer(GL_PIXEL_PACK_BUFFER, static_cast<GLuint>(pack_buffer));
+		if (!vulkan)
+		{
+			glPixelStorei(GL_PACK_ALIGNMENT, pack_alignment);
+			glPixelStorei(GL_PACK_ROW_LENGTH, pack_row_length);
+			if (pack_buffer != 0)
+				glBindBuffer(GL_PIXEL_PACK_BUFFER, static_cast<GLuint>(pack_buffer));
+		}
 
 		ShadowHeader fresh = {};
 		fresh.magic = SHADOW_MAGIC;
@@ -354,9 +456,14 @@ struct ChimeraGSShadow
 	/* A texture of the new device for a record, holding what the record holds. */
 	static GSTexture* Remake(const ShadowRecord& rec)
 	{
+		const bool vulkan = OnVulkan();
 		GLenum format = 0, type = 0;
 		u32 texel_bytes = 0;
-		if (!Lossless(rec.gl_format, &format, &type, &texel_bytes))
+		/* a record made under one renderer is nothing to the other */
+		if (vulkan != ((rec.gl_format & VK_RECORD) != 0))
+			return nullptr;
+		if (vulkan ? !VkLossless(static_cast<GSTexture::Format>(rec.gl_format & ~VK_RECORD), &texel_bytes) :
+		             !Lossless(rec.gl_format, &format, &type, &texel_bytes))
 			return nullptr;
 		if (rec.offset + rec.bytes > SHADOW_PIXEL_BYTES)
 			return nullptr;
@@ -364,8 +471,9 @@ struct ChimeraGSShadow
 			static_cast<GSTexture::Format>(rec.format), false, false);
 		if (!made)
 			return nullptr;
-		GSTextureOGL* const tex = static_cast<GSTextureOGL*>(made);
-		if (tex->GetWidth() != rec.width || tex->GetHeight() != rec.height || tex->GetGLFormat() != rec.gl_format)
+		if (made->GetWidth() != rec.width || made->GetHeight() != rec.height ||
+			(vulkan ? (VK_RECORD | static_cast<u32>(made->GetFormat())) != rec.gl_format :
+			          static_cast<GSTextureOGL*>(made)->GetGLFormat() != rec.gl_format))
 		{
 			delete made;
 			return nullptr;
@@ -374,12 +482,23 @@ struct ChimeraGSShadow
 		const GSTexture::State state = static_cast<GSTexture::State>(rec.state);
 		if (state == GSTexture::State::Dirty && rec.bytes == static_cast<u64>(rec.width) * rec.height * texel_bytes)
 		{
-			glTextureSubImage2D(tex->GetID(), 0, 0, 0, rec.width, rec.height, format, type, Pixels() + rec.offset);
+			if (vulkan)
+			{
+				if (!VkPutBack(made, rec, texel_bytes, Pixels() + rec.offset))
+				{
+					delete made;
+					return nullptr;
+				}
+			}
+			else
+			{
+			glTextureSubImage2D(static_cast<GSTextureOGL*>(made)->GetID(), 0, 0, 0, rec.width, rec.height, format, type, Pixels() + rec.offset);
 			if (glGetError() != GL_NO_ERROR)
 			{
 				DrainErrors();
 				delete made;
 				return nullptr;
+			}
 			}
 			made->SetState(GSTexture::State::Dirty);
 		}
@@ -405,6 +524,9 @@ struct ChimeraGSShadow
 		const bool usable = keep && s_usable && s_block && Header()->magic == SHADOW_MAGIC &&
 		                    Header()->count <= SHADOW_MAX_RECORDS && g_texture_cache && g_gs_renderer;
 		s_usable = false;
+		const bool vulkan = OnVulkan();
+		/* the download textures are the old device's: they go with it */
+		ChimeraGSDropDownloads();
 		if (!usable)
 			return GSreopen(true, false, GSConfig.Renderer, std::nullopt);
 
@@ -441,14 +563,17 @@ struct ChimeraGSShadow
 		DrainErrors();
 
 		GLint unpack_buffer = 0, unpack_alignment = 4, unpack_row_length = 0;
-		glGetIntegerv(GL_PIXEL_UNPACK_BUFFER_BINDING, &unpack_buffer);
-		glGetIntegerv(GL_UNPACK_ALIGNMENT, &unpack_alignment);
-		glGetIntegerv(GL_UNPACK_ROW_LENGTH, &unpack_row_length);
-		if (unpack_buffer != 0)
-			glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
-		glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-		glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
-		DrainErrors();
+		if (!vulkan)
+		{
+			glGetIntegerv(GL_PIXEL_UNPACK_BUFFER_BINDING, &unpack_buffer);
+			glGetIntegerv(GL_UNPACK_ALIGNMENT, &unpack_alignment);
+			glGetIntegerv(GL_UNPACK_ROW_LENGTH, &unpack_row_length);
+			if (unpack_buffer != 0)
+				glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
+			glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+			glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+			DrainErrors();
+		}
 
 		u32 kept = 0, dropped = 0;
 		GSRendererHW* const hw = GSRendererHW::GetInstance();
@@ -493,11 +618,14 @@ struct ChimeraGSShadow
 			kept++;
 		}
 
-		glPixelStorei(GL_UNPACK_ALIGNMENT, unpack_alignment);
-		glPixelStorei(GL_UNPACK_ROW_LENGTH, unpack_row_length);
-		if (unpack_buffer != 0)
-			glBindBuffer(GL_PIXEL_UNPACK_BUFFER, static_cast<GLuint>(unpack_buffer));
-		DrainErrors();
+		if (!vulkan)
+		{
+			glPixelStorei(GL_UNPACK_ALIGNMENT, unpack_alignment);
+			glPixelStorei(GL_UNPACK_ROW_LENGTH, unpack_row_length);
+			if (unpack_buffer != 0)
+				glBindBuffer(GL_PIXEL_UNPACK_BUFFER, static_cast<GLuint>(unpack_buffer));
+			DrainErrors();
+		}
 
 		if (chimera_gs_trace || dropped != 0)
 			std::fprintf(stderr, "chimera gs: %u textures came back, %u targets had nothing kept for them\n", kept, dropped);

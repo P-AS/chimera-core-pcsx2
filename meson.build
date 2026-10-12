@@ -123,6 +123,7 @@ inc = include_directories(
   fc / '3rdparty/xbyak',
   fc / '3rdparty/include',
   fc / '3rdparty/glad/include',   # the GL loader, for the OpenGL renderer
+  fc / '3rdparty/vulkan/include', # the Vulkan headers and allocator, for the Vulkan renderer
   fc / '3rdparty/cpuinfo/include',
   fc / '3rdparty/zydis/include',
   # lz4 comes last: it carries a private xxhash.h, and PCSX2's own copy (in
@@ -157,7 +158,16 @@ if guest_gl
   sources_env.set('CHIMERA_GUEST_MESA', mesa)
   add_project_arguments(['-DCHIMERA_GUEST_GL', '-DCHIMERA_EMBEDDED_SHADERS'],
     language: ['c', 'cpp'])
+  # The Vulkan renderer comes with the hardware renderer too. It has no
+  # softpipe behind it: it draws through Chimera's Vulkan bridge on the
+  # computer's graphics card, or it is not used (the Renderer setting's
+  # "vulkan-hw").
+  add_project_arguments(['-DCHIMERA_GUEST_VK'], language: ['c', 'cpp'])
 endif
+# glslang, for the one function that asks it to compile a shader
+# (GS/Renderers/Vulkan/VKShaderCache.cpp): its own headers, and the
+# build_info.h its CMake would have generated.
+inc_glslang = include_directories('extern/glslang', 'waterbox/glslang-include')
 
 sources_sh = files('waterbox/sources.sh')
 core_sources = files(run_command(sources_sh, 'main', env: sources_env, check: true).stdout().strip().split('\n'))
@@ -198,6 +208,32 @@ if guest_gl
 endif
 
 deps_lib = static_library('pcsx2-deps', dep_sources, include_directories: inc)
+
+# ---- Vulkan ---------------------------------------------------------------------
+#
+# glslang and the guest half of miniBox's Vulkan bridge, linked into the core
+# beside the machine. The bridge's guest half is a wrapper per Vulkan command
+# that hands the call to the host, generated from the SHARED list in miniBox,
+# so an opcode means here what it means to the frontend's host half.
+vk_libs = []
+if guest_gl
+  glslang_sources = files(run_command(sources_sh, 'glslang', env: sources_env, check: true).stdout().strip().split('\n'))
+  # "-Dthread_local=": glslang keeps its allocator per thread. The guest has
+  # one thread that compiles shaders and keeps no thread-local storage of its
+  # own making, so the two variables are ordinary ones.
+  # (waterbox/generated is where the header every file here is given first lives)
+  vk_libs += static_library('glslang', glslang_sources,
+    include_directories: [inc_glslang, include_directories('waterbox/generated')],
+    cpp_args: ['-DENABLE_OPT=0', '-Dthread_local=', '-w'])
+  vk_bridge = custom_target('vk-bridge',
+    output: ['vk-bridge-guest.c', 'vk-bridge-ops.h', 'vk-bridge-host.inc'],
+    command: [find_program('python3'), mb / 'source/vk/gen-vk-bridge.py',
+      mb / 'extern/vulkan-headers/registry/vk.xml',
+      mb / 'source/vk/vk-entry-points.txt', '@OUTDIR@'])
+  vk_libs += static_library('vk-bridge-guest', [files(mb / 'source/vk/vk-guest.c'), vk_bridge[0], vk_bridge[1]],
+    include_directories: include_directories('waterbox/generated'),
+    c_args: ['-I' + mb / 'source/vk', '-I' + mb / 'extern/vulkan-headers/include', '-I' + meson.current_build_dir()])
+endif
 
 
 # What a sandbox answers differently from a desktop. Each file says what it
@@ -266,8 +302,8 @@ if meson.is_cross_build()
 
   executable('core', core_sources + driver_sources + gl_sources,
     name_suffix: 'wbx',
-    include_directories: inc,
-    link_with: [deps_lib],
+    include_directories: [inc, inc_glslang],
+    link_with: [deps_lib] + vk_libs,
     link_args: mesa_link + [
       '-static', '-no-pie',
       '-Wl,--eh-frame-hdr', '-Wl,-O2', '-Wl,--no-relax',
@@ -320,6 +356,20 @@ else
     # the generated ops header lands in the target's private dir
     bridge_args += ['-I' + meson.current_build_dir()]
     bridge_deps = [meson.get_compiler('c').find_library('EGL', required: true)]
+
+    # The Vulkan bridge's host half, the same way: miniBox's one file, with
+    # its dispatch generated from the shared list. It links against nothing -
+    # the computer's Vulkan loader is looked for when a core asks - so a
+    # machine without Vulkan loses the Vulkan renderer's checks and nothing
+    # else.
+    vk_bridge_host = custom_target('vk-bridge-host',
+      output: ['vk-bridge-host.inc', 'vk-bridge-ops.h', 'vk-bridge-guest.c'],
+      command: [find_program('python3'), mb / 'source/vk/gen-vk-bridge.py',
+        mb / 'extern/vulkan-headers/registry/vk.xml',
+        mb / 'source/vk/vk-entry-points.txt', '@OUTDIR@'])
+    bridge_sources += [files(mb / 'source/vk/vk-host.c'), vk_bridge_host[0], vk_bridge_host[1]]
+    bridge_args += ['-DCHIMERA_VK_BRIDGE', '-I' + mb / 'source/vk', '-I' + mb / 'extern/vulkan-headers/include']
+    bridge_deps += [dl]
   endif
 
   # The sandbox runner is not part of the machine: it drives core.wbx from

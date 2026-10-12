@@ -734,6 +734,35 @@ static void ApplyInput()
  * different bios, or interprets where another recompiled, is a different
  * machine. None of it is a display preference.
  */
+#ifdef CHIMERA_GUEST_VK
+/* The Vulkan bridge (miniBox source/vk/vk-bridge.h), said here and not
+ * included: that header brings miniBox's Vulkan headers with it, and PCSX2
+ * compiles against its own. */
+extern "C" {
+typedef uint64_t (*chimera_vk_bridge_fn)(uint64_t op, uint64_t a, uint64_t b, uint64_t c, uint64_t d, uint64_t e);
+bool chimera_vk_install(chimera_vk_bridge_fn bridge);
+uint64_t chimera_vk_context_id(void);
+void chimera_vk_forget_mappings(void);
+}
+/* the Renderer setting is "vulkan-hw" */
+static bool s_chimera_vulkan_wanted = false;
+/* SetVulkanBridge was called, and the bridge took the callback */
+static bool s_chimera_vulkan_bridge = false;
+static chimera_vk_bridge_fn s_chimera_vulkan_host = nullptr;
+/* While the renderer lets go of a device that a load has already destroyed
+ * (the rebuild, below), nothing of Vulkan crosses to the host: each command
+ * answers "done" at once. The objects are gone on the host's side whatever is
+ * said of them, and a wait on one of their fences then ends instead of
+ * failing. */
+static bool s_chimera_vulkan_quiet = false;
+static uint64_t ChimeraVulkanBridge(uint64_t op, uint64_t a, uint64_t b, uint64_t c, uint64_t d, uint64_t e)
+{
+	if (s_chimera_vulkan_quiet && op >= 100)
+		return 0;
+	return s_chimera_vulkan_host(op, a, b, c, d, e);
+}
+#endif
+
 static void ApplySettings(SettingsInterface& si, bool verbose)
 {
 	/* The bios. There is no HLE alternative on a PS2 - nothing boots without
@@ -821,9 +850,17 @@ static void ApplySettings(SettingsInterface& si, bool verbose)
 		 * that cannot have a GPU today should still run. */
 		if (!strcmp(value, "opengl") || !strcmp(value, "opengl-hw"))
 			gsRenderer = GSRendererType::OGL;
-		/* The memory a GL frame is read back into, now and not at the first
+#ifdef CHIMERA_GUEST_VK
+		/* "vulkan-hw" is the same hardware renderer on PCSX2's Vulkan device,
+		 * through Chimera's Vulkan bridge. That one has no softpipe behind
+		 * it: with no Vulkan handed over, Init refuses and says so. */
+		s_chimera_vulkan_wanted = !strcmp(value, "vulkan-hw");
+		if (s_chimera_vulkan_wanted)
+			gsRenderer = GSRendererType::VK;
+#endif
+		/* The memory a frame is read back into, now and not at the first
 		 * frame: taken after a state exists, that state unmaps it. */
-		if (gsRenderer == GSRendererType::OGL)
+		if (gsRenderer != GSRendererType::SW)
 		{
 			ChimeraGSReserveFrame();
 			/* and the block the render targets are copied into before a
@@ -928,7 +965,7 @@ static void ApplySettings(SettingsInterface& si, bool verbose)
 		static const int kFilterModes[] = { 2, 0, 1, 3 }; /* BiFiltering: PS2, Nearest, Forced, Forced_But_Sprite */
 		si.SetIntValue("EmuCore/GS", "filter", kFilterModes[SettingIndex("textureFiltering", kFilter, 4, 0)]);
 		si.SetBoolValue("EmuCore/GS", "fxaa",
-			gsRenderer == GSRendererType::OGL && wbx_setting_bool("fxaa", 0) != 0);
+			gsRenderer != GSRendererType::SW && wbx_setting_bool("fxaa", 0) != 0);
 	}
 	/* Internal resolution (chimera#170): PCSX2's own upscaling, which draws
 	 * every render target at a multiple of the console's size. OpenGL renderers
@@ -940,7 +977,7 @@ static void ApplySettings(SettingsInterface& si, bool verbose)
 		static const char* const kScales[] = { "1x", "2x", "3x", "4x" };
 		const int scale = SettingIndex("internalResolution", kScales, 4, 0) + 1;
 		si.SetFloatValue("EmuCore/GS", "upscale_multiplier",
-			gsRenderer == GSRendererType::OGL ? static_cast<float>(scale) : 1.0f);
+			gsRenderer != GSRendererType::SW ? static_cast<float>(scale) : 1.0f);
 	}
 	si.SetBoolValue("EmuCore/GS", "VsyncEnable", false);
 	si.SetBoolValue("EmuCore/GS", "OsdShowMessages", false);
@@ -1353,6 +1390,16 @@ ECL_EXPORT int Init(void)
 	}
 #endif
 
+#ifdef CHIMERA_GUEST_VK
+	if (s_chimera_vulkan_wanted && !s_chimera_vulkan_bridge)
+	{
+		snprintf(g_loadError, sizeof(g_loadError),
+			"the renderer setting is vulkan-hw, and no Vulkan was handed over (this computer may have no Vulkan "
+			"driver, or this Chimera is older than its Vulkan bridge).");
+		return 0;
+	}
+#endif
+
 	if (!VMManager::Internal::CPUThreadInitialize())
 	{
 		snprintf(g_loadError, sizeof(g_loadError), "the machine would not initialise");
@@ -1722,27 +1769,77 @@ static uint64_t s_chimera_gl_context = 0;
  * so the load itself cannot wipe the flag. */
 static bool s_chimera_gl_state_loaded = false;
 
+/* Which device is drawing: OpenGL's, Vulkan's, or neither (the software
+ * renderer). What is said above of OpenGL's names is true of Vulkan's handles,
+ * and more so: there a load is always a new device. */
+static bool ChimeraOnVulkan()
+{
+#ifdef CHIMERA_GUEST_VK
+	return g_gs_device && g_gs_device->GetRenderAPI() == RenderAPI::Vulkan;
+#else
+	return false;
+#endif
+}
+
+static bool ChimeraOnACard()
+{
+	return g_gs_device && (g_gs_device->GetRenderAPI() == RenderAPI::OpenGL || ChimeraOnVulkan());
+}
+
+static uint64_t ChimeraLiveContext()
+{
+#ifdef CHIMERA_GUEST_VK
+	if (ChimeraOnVulkan())
+		return s_chimera_vulkan_bridge ? chimera_vk_context_id() : 0;
+#endif
+	return chimera_gl_context_id();
+}
+
 static void ChimeraCheckGLContext()
 {
-	if (!g_gs_device || g_gs_device->GetRenderAPI() != RenderAPI::OpenGL)
+	if (!ChimeraOnACard())
 		return;
 	const bool afterLoad = s_chimera_gl_state_loaded;
 	s_chimera_gl_state_loaded = false;
-	const uint64_t live = chimera_gl_context_id();
+	const uint64_t live = ChimeraLiveContext();
 	if (live == 0 || live == s_chimera_gl_context)
 		return;
 	if (s_chimera_gl_context != 0 || afterLoad)
 	{
-		Console.WriteLn("chimera: GL objects came from context %llu, now %llu; rebuilding",
+		const bool vulkan = ChimeraOnVulkan();
+		Console.WriteLn("chimera: the renderer's objects came from context %llu, now %llu; rebuilding",
 			(unsigned long long)s_chimera_gl_context, (unsigned long long)live);
+#ifdef CHIMERA_GUEST_VK
+		/* until the old device has been let go of (ChimeraOldDeviceGone, which
+		 * closing the GS device calls when it has), nothing of Vulkan crosses */
+		s_chimera_vulkan_quiet = vulkan;
+#endif
 		/* After a load the texture cache's render targets are kept and given
 		 * back what a state carried of them (gs-shadow.cpp, chimera issue
 		 * 190); a rebuild for any other reason has nothing to give them, and
 		 * is GSreopen's "we lost the device" as it always was. */
 		ChimeraGSShadowRebuild(afterLoad);
-		while (glGetError() != GL_NO_ERROR) {}
+#ifdef CHIMERA_GUEST_VK
+		s_chimera_vulkan_quiet = false;
+#endif
+		if (!vulkan)
+			while (glGetError() != GL_NO_ERROR) {}
 	}
 	s_chimera_gl_context = live;
+}
+#endif
+
+#ifdef CHIMERA_GUEST_VK
+/* Closing the GS device says so when the old device is gone (patches: "the
+ * Vulkan renderer is Chimera's"): the copies of mapped memory nothing will
+ * unmap now are given back, and the calls cross again for the device about
+ * to be made. */
+extern "C" void ChimeraOldDeviceGone(void)
+{
+	if (!s_chimera_vulkan_quiet)
+		return;
+	chimera_vk_forget_mappings();
+	s_chimera_vulkan_quiet = false;
 }
 #endif
 
@@ -1768,9 +1865,9 @@ ECL_EXPORT void StateLoaded(void)
 ECL_EXPORT void StateSaving(void)
 {
 #ifdef CHIMERA_GUEST_GL
-	if (!g_loaded || !g_gs_device || g_gs_device->GetRenderAPI() != RenderAPI::OpenGL)
+	if (!g_loaded || !ChimeraOnACard())
 		return;
-	const uint64_t live = chimera_gl_context_id();
+	const uint64_t live = ChimeraLiveContext();
 	if (live == 0 || live != s_chimera_gl_context)
 		return;
 	ChimeraGSShadowSave();
@@ -2068,6 +2165,19 @@ ECL_EXPORT void SetGpuBridge(uint64_t addr)
 {
 	if (!chimera_gl_bridge_start((chimera_gl_bridge_fn_t)addr))
 		fprintf(stderr, "chimera: the GPU bridge was offered and refused\n");
+}
+#endif
+
+/* The same seam, for Vulkan: handed over before Init by a frontend whose
+ * computer has a Vulkan driver. A core that exports both is handed both, and
+ * the Renderer setting decides which is used ("vulkan-hw"). */
+#ifdef CHIMERA_GUEST_VK
+ECL_EXPORT void SetVulkanBridge(uint64_t addr)
+{
+	s_chimera_vulkan_host = (chimera_vk_bridge_fn)addr;
+	s_chimera_vulkan_bridge = s_chimera_vulkan_host && chimera_vk_install(ChimeraVulkanBridge);
+	if (!s_chimera_vulkan_bridge)
+		fprintf(stderr, "chimera: the Vulkan bridge was offered and refused\n");
 }
 #endif
 

@@ -1091,6 +1091,32 @@ else
 		else
 			report "gpu:picture" FAIL "$(printf '%s' "$gpBad" | head -c 200)"
 		fi
+
+		# The same three settings under the Vulkan renderer (chimera issue 248),
+		# held to the same two things - and to the machine OpenGL ran.
+		vpBase="$(gpRun vkbase '{"renderer":"vulkan-hw"}')"
+		if grep -q 'no Vulkan was handed over' "$work/gp.vkbase.txt" "$work/gp.vkbase.err"; then
+			report "vk:settings" SKIP "this computer handed the core no Vulkan"
+		elif [ -z "$vpBase" ] || ! grep -q "^frames=$gfxFrames\$" "$work/gp.vkbase.txt"; then
+			report "vk:settings" FAIL "the baseline run did not complete $gfxFrames frames: $(grep -v '^\s*$' "$work/gp.vkbase.err" | tail -1 | cut -c1-100)"
+		else
+			vpBad=""
+			cmp -s "$work/gp.base.machine" "$work/gp.vkbase.machine" || vpBad="$vpBad Vulkan ran another machine than OpenGL;"
+			for v in 'vknearest {"renderer":"vulkan-hw","textureFiltering":"nearest"}' 'vkfxaa {"renderer":"vulkan-hw","fxaa":true}' \
+				'vkupscale {"renderer":"vulkan-hw","internalResolution":"2x"}'; do
+				name="${v%% *}"
+				hash="$(gpRun "$name" "${v#* }")"
+				cmp -s "$work/gp.vkbase.machine" "$work/gp.$name.machine" \
+					|| vpBad="$vpBad $name changed the machine:$(diff "$work/gp.vkbase.machine" "$work/gp.$name.machine" | tr '\n' ' ' | head -c 80);"
+				[ -n "$hash" ] && [ "$hash" != "$vpBase" ] \
+					|| vpBad="$vpBad $name drew the same picture as the default over $gfxFrames frames;"
+			done
+			if [ -z "$vpBad" ]; then
+				report "vk:settings" PASS "$gfxFrames frames of $(basename "$gfxdisc") with Vulkan: the machine OpenGL ran, and four pictures (default, nearest, fxaa, 2x internal resolution)"
+			else
+				report "vk:settings" FAIL "$(printf '%s' "$vpBad" | head -c 200)"
+			fi
+		fi
 	fi
 fi
 
@@ -1203,6 +1229,87 @@ else
 	fi
 fi
 
+# ---- the hardware renderer on Vulkan (chimera issue 248) --------------------
+#
+# The Renderer setting's "vulkan-hw": PCSX2's Vulkan renderer, through
+# miniBox's Vulkan bridge. The runner hands both bridges over, as the frontend
+# does, and the core uses the one the setting names. It needs a Vulkan driver
+# on this computer - one that draws on the processor will do (Mesa's lavapipe)
+# - and says SKIP without one.
+#
+# What these do NOT stand in for: padtest.elf is not a game and lavapipe is not
+# a graphics card. What a game drew on a GTX 1060 is in docs/PLAN.md.
+vk_legs="vk:bridge vk:machine vk:picture vk:rerecord"
+if [ -z "$bios" ] || [ ! -f "$padelf" ]; then
+	for leg in $vk_legs; do report "$leg" SKIP "needs a bios and padtest.elf"; done
+else
+	vkw="$work/vulkan"
+	mkdir -p "$vkw"
+	cp "$bios" "$vkw/bios.bin"
+	cp "$padelf" "$vkw/padtest.elf"
+	printf '{"disc":["padtest.elf"]}' > "$vkw/slots"
+	# <name> <renderer> <run-wbx options...>: the run's output in $work/vk.<name>.txt and .err
+	vkrun() {
+		vkname="$1"; printf '{"renderer":"%s"}' "$2" > "$vkw/settings"; shift 2
+		CHIMERA_GPU=1 "$nat/run-wbx" "$gst/core.wbx" "$vkw" "$@" > "$work/vk.$vkname.txt" 2> "$work/vk.$vkname.err"
+	}
+	vkmachine() { grep -E '^(frames|vsync|audioHash|lagFrames|domain\[)' "$1"; }
+	vkrun v300 vulkan-hw --frames 300 --screenshot "$work/vk.300.tga"
+	# the runner names the device the core made, when it made one
+	vk_card="$(grep -o 'vulkan bridge: .*(Vulkan [^)]*)' "$work/vk.v300.err" | head -1 | cut -c16-)"
+	if ! grep -q '^gpu bridge:' "$work/vk.v300.err"; then
+		for leg in $vk_legs; do
+			report "$leg" SKIP "run-wbx was built without the bridges' host half (meson configure -Dgl_bridge=true)"
+		done
+	elif grep -q 'no Vulkan was handed over' "$work/vk.v300.txt" "$work/vk.v300.err"; then
+		for leg in $vk_legs; do
+			report "$leg" SKIP "this computer handed the core no Vulkan: $(grep -h -m1 '^vulkan bridge:' "$work/vk.v300.err" | cut -c1-120)"
+		done
+	else
+		refused="$(grep -c 'calls were refused' "$work/vk.v300.err")"
+		if [ -n "$vk_card" ] && [ "$refused" -eq 0 ] && grep -q '^frames=300$' "$work/vk.v300.txt"; then
+			report "vk:bridge" PASS "300 frames of padtest.elf on a Vulkan device ($vk_card), and no command the renderer sent was refused"
+		else
+			report "vk:bridge" FAIL "device [${vk_card:-none made}], runs with refused commands: $refused, $(grep -v '^\s*$' "$work/vk.v300.err" | tail -1 | cut -c1-100)"
+		fi
+
+		# The renderer is not the machine: memory, sound and lag are the
+		# software renderer's.
+		vkrun sw software --frames 300
+		if [ -n "$(vkmachine "$work/vk.sw.txt")" ] && [ "$(vkmachine "$work/vk.sw.txt")" = "$(vkmachine "$work/vk.v300.txt")" ]; then
+			report "vk:machine" PASS "300 frames drawn with Vulkan: the five memory domains, the sound and the lag count are the software renderer's"
+		else
+			report "vk:machine" FAIL "$(diff <(vkmachine "$work/vk.sw.txt") <(vkmachine "$work/vk.v300.txt") | head -4 | tr '\n' ' ')"
+		fi
+
+		# The picture itself, against OpenGL's on the same computer: the same
+		# but for pixels the two do not round alike. Frame 300 is the test
+		# program's screen; frame 40 is before it has drawn it, and is told
+		# apart from it.
+		vkrun g300 opengl-hw --frames 300 --screenshot "$work/gl.300.tga"
+		vkrun v40 vulkan-hw --frames 40 --screenshot "$work/vk.40.tga"
+		same="$(python3 "$here/tests/check-same-picture.py" "$work/gl.300.tga" "$work/vk.300.tga" 2>&1)"; same_rc=$?
+		other="$(python3 "$here/tests/check-same-picture.py" "$work/gl.300.tga" "$work/vk.40.tga" 2>&1)"; other_rc=$?
+		if [ "$same_rc" = 0 ] && [ "$other_rc" = 1 ]; then
+			report "vk:picture" PASS "Vulkan draws what OpenGL draws at frame 300: ${same%% (*}; another frame is told apart (${other%% (*})"
+		else
+			report "vk:picture" FAIL "against OpenGL at frame 300: $(head -1 <<< "$same"); another frame, which must differ: $(head -1 <<< "$other")"
+		fi
+
+		# A state saved and loaded around every frame: every load is a new
+		# Vulkan device, and the renderer lets go of the old one without a
+		# word to it. (Closing the device used to ask the old one for its
+		# pipeline cache, get no answer, and allocate a size nobody had set.)
+		vkrun rr vulkan-hw --frames 300 --rerecord
+		if [ -n "$(digests < "$work/vk.v300.txt")" ] && [ "$(digests < "$work/vk.v300.txt")" = "$(digests < "$work/vk.rr.txt")" ] \
+			&& ! grep -q 'calls were refused' "$work/vk.rr.err"; then
+			report "vk:rerecord" PASS "300 frames with a state saved and loaded around every one - a new Vulkan device each time - and the straight run, picture included; no command refused"
+		else
+			report "vk:rerecord" FAIL "$(diff <(digests < "$work/vk.v300.txt") <(digests < "$work/vk.rr.txt") | head -4 | tr '\n' ' ') $(grep -m1 'calls were refused' "$work/vk.rr.err") $(grep -m1 'the guest died' "$work/vk.rr.err")"
+		fi
+	fi
+fi
+
 # ---- every restore rebuilds, the frame-0 anchor included (chimera issue 126)
 #
 # On the GPU bridge, the renderer's objects live in the driver and a savestate
@@ -1312,36 +1419,55 @@ else
 		# llvmpipe is not a driver. The proof on a moving 3D scene, on a real
 		# card, is in docs/PLAN.md - and so is what does not come back above the
 		# machine's own resolution.
-		if grep -q "^chimera gl: no context" "$gz/rewind.0.log"; then
-			report "gl:picture-after-load" SKIP "this build or this machine gives the bridge no GL context"
-		else
-			pal="$work/glafterload"
+		#
+		# The same is asked of the Vulkan renderer (vk:picture-after-load,
+		# chimera issue 248): the same textures, fetched through a download
+		# texture instead of glGetTextureSubImage, and given back to a device
+		# that is a new one after every load.
+		picture_after_load() { # <check's name> <renderer> <a folder of its own>
+			palleg="$1"; palrenderer="$2"; pal="$3"
 			mkdir -p "$pal"
 			palrun() { # <movie> <log> <chimera-run arguments...>
 				palmovie="$1"; pallog="$2"; shift 2
-				CHIMERA_PICTURE_TRACE=1 "$crun" "$cpkg" "$padelf" "$palmovie" --settings '{"renderer":"opengl-hw"}' \
+				CHIMERA_PICTURE_TRACE=1 "$crun" "$cpkg" "$padelf" "$palmovie" --settings "{\"renderer\":\"$palrenderer\"}" \
 					--frames 70 --firmware "bios.bin=$bios" "$@" > "$pallog" 2>&1 || true
 			}
 			exact() { grep -c ": 0.00% of pixels differ, 0.00% by more than 8 (largest 0)" "$1"; }
-			palrun "$gz/none.txt" "$pal/record.log" --record "$pal/movie.txt"
-			if [ ! -s "$pal/movie.txt" ]; then
-				report "gl:picture-after-load" FAIL "could not record a movie to go back through (see $pal/record.log)"
-			else
-				palprobe="--gpu --greenzone 4096 --greenzone-period 1 --greenzone-max-stride 1 --settle-probe 60,6"
-				palrun "$pal/movie.txt" "$pal/told.log" $palprobe
-				CHIMERA_NO_STATE_SAVING=1 palrun "$pal/movie.txt" "$pal/untold.log" $palprobe
-				if grep -q "^usage: chimera-run" "$pal/told.log"; then
-					report "gl:picture-after-load" SKIP "this chimera-run has no --settle-probe (an older Chimera)"
-				elif ! grep -q "pictrace: load, on frame 60:" "$pal/told.log" || ! grep -q "pictrace: load, on frame 60:" "$pal/untold.log"; then
-					report "gl:picture-after-load" FAIL "the load did not land on the frame before the ones compared, so nothing was measured (see $pal/told.log)"
-				elif ! grep -q "^settle-probe: the picture is wrong up to drawn frame" "$pal/untold.log"; then
-					report "gl:picture-after-load" FAIL "the control drew every frame right with the core left untold: this program does not show the loss, or the engine told the core anyway (see $pal/untold.log)"
-				elif [ "$(exact "$pal/told.log")" -ne 6 ]; then
-					report "gl:picture-after-load" FAIL "$(exact "$pal/told.log") of 6 frames after a load came back exactly: $(grep -m1 '^settle-probe: the picture is wrong' "$pal/told.log" || echo 'within the probe'"'"'s tolerance, not exact') (see $pal/told.log)"
-				else
-					report "gl:picture-after-load" PASS "six frames drawn right after a load are bit for bit the pictures they were; with the core left untold, $(sed -n 's/^settle-probe: the picture is wrong up to drawn frame #\([0-9]*\).*/the first \1 are not/p' "$pal/untold.log")"
-				fi
+			# (on the card as well: a core asked for Vulkan and handed none refuses to start)
+			palrun "$gz/none.txt" "$pal/record.log" --gpu --record "$pal/movie.txt"
+			if [ ! -s "$pal/movie.txt" ] && grep -q "no Vulkan was handed over" "$pal/record.log"; then
+				report "$palleg" SKIP "this chimera-run handed the core no Vulkan (no Vulkan driver on this computer, or a Chimera from before its Vulkan bridge)"
+				return
 			fi
+			if [ ! -s "$pal/movie.txt" ]; then
+				report "$palleg" FAIL "could not record a movie to go back through (see $pal/record.log)"
+				return
+			fi
+			palprobe="--gpu --greenzone 4096 --greenzone-period 1 --greenzone-max-stride 1 --settle-probe 60,6"
+			palrun "$pal/movie.txt" "$pal/told.log" $palprobe
+			CHIMERA_NO_STATE_SAVING=1 palrun "$pal/movie.txt" "$pal/untold.log" $palprobe
+			if grep -q "^usage: chimera-run" "$pal/told.log"; then
+				report "$palleg" SKIP "this chimera-run has no --settle-probe (an older Chimera)"
+			elif [ "$palrenderer" = vulkan-hw ] && grep -q "^chimera vk: no Vulkan on this machine" "$pal/told.log"; then
+				report "$palleg" SKIP "this computer has no Vulkan: $(sed -n 's/^chimera vk: no Vulkan on this machine //p' "$pal/told.log" | head -1 | cut -c1-80)"
+			elif [ "$palrenderer" = vulkan-hw ] && ! grep -q "^chimera vk: .*(Vulkan " "$pal/told.log"; then
+				report "$palleg" SKIP "this chimera-run handed the core no Vulkan device (a Chimera from before its Vulkan bridge, or one too old for this core's list of commands): $(grep -m1 -i 'vulkan' "$pal/told.log" | cut -c1-100)"
+			elif ! grep -q "pictrace: load, on frame 60:" "$pal/told.log" || ! grep -q "pictrace: load, on frame 60:" "$pal/untold.log"; then
+				report "$palleg" FAIL "the load did not land on the frame before the ones compared, so nothing was measured (see $pal/told.log)"
+			elif ! grep -q "^settle-probe: the picture is wrong up to drawn frame" "$pal/untold.log"; then
+				report "$palleg" FAIL "the control drew every frame right with the core left untold: this program does not show the loss, or the engine told the core anyway (see $pal/untold.log)"
+			elif [ "$(exact "$pal/told.log")" -ne 6 ]; then
+				report "$palleg" FAIL "$(exact "$pal/told.log") of 6 frames after a load came back exactly: $(grep -m1 '^settle-probe: the picture is wrong' "$pal/told.log" || echo 'within the probe'"'"'s tolerance, not exact') (see $pal/told.log)"
+			else
+				report "$palleg" PASS "six frames drawn right after a load are bit for bit the pictures they were; with the core left untold, $(sed -n 's/^settle-probe: the picture is wrong up to drawn frame #\([0-9]*\).*/the first \1 are not/p' "$pal/untold.log")"
+			fi
+		}
+		if grep -q "^chimera gl: no context" "$gz/rewind.0.log"; then
+			report "gl:picture-after-load" SKIP "this build or this machine gives the bridge no GL context"
+			report "vk:picture-after-load" SKIP "this build or this machine gives the bridge no GL context, and chimera-run hands Vulkan over beside it"
+		else
+			picture_after_load "gl:picture-after-load" opengl-hw "$work/glafterload"
+			picture_after_load "vk:picture-after-load" vulkan-hw "$work/vkafterload"
 		fi
 	fi
 fi
