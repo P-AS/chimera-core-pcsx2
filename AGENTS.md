@@ -17,7 +17,7 @@ natively as a reference, and the gate holds the two byte-identical.
 - `waterbox/sources.sh` - the curated list of upstream sources both flavors compile.
 - `waterbox/cinterface.cpp`, `host.cpp`, `host-sys.cpp`, `gs-device.cpp`, `audio-stream.cpp`, `stubs/` - the adapter between PCSX2 and the guest ABI.
 - `waterbox/arcade/` - the NAMCO board (JVS, ATA/ATAPI, SRAM), kept beside upstream.
-- `waterbox/game-database.cpp`, `gen-gamedb.py`, `gen-shaders.py` - PCSX2's per-title database and shaders, compiled into the core.
+- `waterbox/game-database.cpp`, `gen-gamedb.py`, `gen-shaders.py` - PCSX2's per-title database (its compatibility patches included, which `extern/pcsx2/pcsx2/Patch.cpp` applies) and shaders, compiled into the core.
 - `waterbox/gl-osmesa.cpp`, `gl-bridged.cpp`, `gl-host.c`, `gl-entry-points.txt` - OpenGL in the sandbox, and the GPU bridge's guest and host halves.
 - `waterbox/run-native.c`, `run-wbx.c`, `gate-harness.h` - the native reference and the sandbox driver.
 - `waterbox/apply-patches.sh`, `setup-mesa.sh`, `setup-guest.sh`, `build-package.sh`, `run-gate.sh` - the build and the core gate.

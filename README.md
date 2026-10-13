@@ -16,6 +16,11 @@ different machines - the recompiler's EE floating point is not the
 interpreter's - so a project pins the choice. The software rasteriser takes its
 C++ scanline path either way.
 
+PCSX2's game database is compiled into the core, its compatibility patches
+included: a game gets the corrections PCSX2 gives it, and a package pins them.
+Cheats and the patches a person chooses (widescreen, no-interlacing) are not
+applied.
+
 ## Using it in Chimera
 
 Chimera ships no cores and downloads nothing. Download the `.chimeraCore`

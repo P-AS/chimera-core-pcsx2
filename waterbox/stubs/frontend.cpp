@@ -60,14 +60,6 @@ namespace GameList
 	std::string GetCustomTitleForPath(const std::string& path) { return {}; }
 } // namespace GameList
 
-namespace Patch
-{
-	void ReloadPatches(const std::string& serial, u32 crc, bool force_reload_files, bool reload_enabled_list,
-		bool verbose, bool verbose_if_changed) {}
-	void UpdateActivePatches(bool reload_enabled_list, bool verbose, bool verbose_if_changed, bool apply_widescreen) {}
-	void UnloadPatches() {}
-} // namespace Patch
-
 /* ---------------------------------------------------------------------------
  * Savestates. The sandbox snapshots the guest; PCSX2's own format is not
  * compiled, and the paths that would write one say so by failing.

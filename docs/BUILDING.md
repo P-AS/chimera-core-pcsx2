@@ -156,7 +156,7 @@ The script judges the series as a whole:
 - If the working tree is pristine it applies the series and prints
   `applied: <patch>` for each.
 - If the working tree is exactly what the series leaves behind it prints
-  `already applied: all 26 patches` and changes nothing.
+  `already applied: all 29 patches` and changes nothing.
 - Anything in between is an error that names the files and prints the reset
   command.
 

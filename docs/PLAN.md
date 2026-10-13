@@ -1025,6 +1025,64 @@ Asked about and not the cause, each tried on the scene: PCSX2's Blending
 Accuracy at "full", its downloads from the card switched off, its per-game
 fixes switched off, the SSE4 code path against AVX2.
 
+## The compatibility patches are on (user-decided, 2026-10-13)
+
+PCSX2's game database carries, for some two hundred and forty titles,
+corrections to the game's own code: "patches", written to memory when the
+program is loaded and again every frame, and for six titles "dynaPatches", a
+short pattern of instructions replaced wherever the recompiler meets it.
+PCSX2 applies them unless a person turns them off. Black's is four words -
+"COP2 Rearrangement. Fixes broken collisions."
+
+This core refused them from the start, on the grounds that a movie must not
+have the game rewritten behind its back. The owner's decision, when Black
+came up (chimera issue 257): "On, as on upstream. We've already done this
+for some cores." The argument that settled it is the one already made for
+the rest of the database: it is compiled into the core, so the package a
+movie cites pins the patches exactly as it pins the clamp modes.
+
+**What changed.**
+
+- `waterbox/gen-gamedb.py` carries `patches` and `dynaPatches` (they were on
+  its list of keys left out). A patch's text is one line with its newlines
+  escaped. Keys are read as text: one checksum in the file is all digits
+  (SLES-50580's `33611180`) and the YAML reader made a number of it.
+- `waterbox/game-database.cpp` reads them into upstream's own structure, with
+  upstream's own rules for a bad or a repeated checksum.
+- PCSX2's `Patch.cpp` is compiled, and the stand-ins that answered for it
+  are gone. Patch 0028 keeps it from reading any patch from a file: upstream
+  also looks in a folder of patch files and in `patches.zip`, which is where
+  cheats, widescreen and the patches a person chooses live. A core has
+  neither, and a file is not part of the package.
+- `EnablePatches` is on. Cheats, widescreen patches and no-interlacing
+  patches stay off.
+
+There is no setting for it. Every movie of a title that has a patch plays
+differently from this build on; a project made with an older build keeps
+that build.
+
+**Tested.** Two new checks. `gamedb:patches` needs nothing: a machine with an
+empty tray says Black carries one patch and Ratchet & Clank 2 (SCES-51607)
+one pattern, in the native build and in the sandbox. `patch:memory` needs a
+BIOS: the core is asked what Black's patches do to the word at 0037EBD4
+(`patch_probe`, a question like `gamedb_probe` and not a setting), loads them
+the way PCSX2 does for a disc, applies them, and answers
+`before=00000000 after=4b000460` in both. With `EnablePatches` off it
+answers `after=00000000`. The test script: 44 passed, 0 failed, 5 skipped
+(the same five as before: a light-gun disc, a graphics disc and the three
+arcade boards are not named on this machine); through Chimera: 3 passed, 0
+failed, 1 skipped.
+
+And the game itself, Black (Europe), 1,500 frames through Chimera's runner:
+the core's log says "Found 1 game patches in GameDB", and the four words in
+the console's memory are the patch's (`4b000460 4af103bc` at 0037EBD4,
+`4a800460 4b7103bc` at 0037EBF0) where the published build has the game's
+own order. Nothing else in the 32 MiB differs at that frame.
+
+**Not proven:** that the collisions are right now - nobody played to a place
+where they were wrong. No title with a dynaPatch was run; that road is
+upstream's own call from the recompiler and is only known to link.
+
 ## What is known to be wrong, and is next
 
 - **Only one disc format is tested**: a raw 2352-byte-sector CD. CHD and CSO

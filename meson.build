@@ -227,6 +227,9 @@ if guest_gl
     cpp_args: ['-DENABLE_OPT=0', '-Dthread_local=', '-w'])
   vk_bridge = custom_target('vk-bridge',
     output: ['vk-bridge-guest.c', 'vk-bridge-ops.h', 'vk-bridge-host.inc'],
+    # made again when miniBox's generator or its list changes: without this
+    # a new miniBox was built against the old bridge and did not compile
+    depend_files: files(mb / 'source/vk/gen-vk-bridge.py', mb / 'source/vk/vk-entry-points.txt'),
     command: [find_program('python3'), mb / 'source/vk/gen-vk-bridge.py',
       mb / 'extern/vulkan-headers/registry/vk.xml',
       mb / 'source/vk/vk-entry-points.txt', '@OUTDIR@'])
@@ -364,6 +367,7 @@ else
     # else.
     vk_bridge_host = custom_target('vk-bridge-host',
       output: ['vk-bridge-host.inc', 'vk-bridge-ops.h', 'vk-bridge-guest.c'],
+      depend_files: files(mb / 'source/vk/gen-vk-bridge.py', mb / 'source/vk/vk-entry-points.txt'),
       command: [find_program('python3'), mb / 'source/vk/gen-vk-bridge.py',
         mb / 'extern/vulkan-headers/registry/vk.xml',
         mb / 'source/vk/vk-entry-points.txt', '@OUTDIR@'])

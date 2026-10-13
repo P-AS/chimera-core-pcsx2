@@ -379,6 +379,31 @@ else
 	report "gamedb:entry" PASS "SLUS-20312 is Final Fantasy X and carries eeClampMode 3, in both flavors"
 fi
 
+# The database's patches are in the core too (2026-10-13): PCSX2's corrections
+# to a game's own code, which a PCSX2 user has without asking. Black has one -
+# "COP2 Rearrangement. Fixes broken collisions." - and Ratchet & Clank 2 is
+# one of the six titles with the other kind, a pattern of instructions replaced
+# wherever it is met. A machine with an empty tray can say it knows both.
+printf '{"verbose":true,"gamedb_probe":"SLES-53886"}' > "$gdb_dir/settings"
+pat_nat="$(probe_of "$("$nat/run-native" "$gdb_dir" --frames 1 2>&1 | plain)")"
+pat_box="$(probe_of "$("$nat/run-wbx" "$gst/core.wbx" "$gdb_dir" --frames 1 2>&1 | plain)")"
+printf '{"verbose":true,"gamedb_probe":"SCES-51607"}' > "$gdb_dir/settings"
+dyn_nat="$(probe_of "$("$nat/run-native" "$gdb_dir" --frames 1 2>&1 | plain)")"
+dyn_box="$(probe_of "$("$nat/run-wbx" "$gst/core.wbx" "$gdb_dir" --frames 1 2>&1 | plain)")"
+case "$pat_nat|$pat_box" in
+	*'name="Black"'*' patches=1 dynaPatches=0|'*'name="Black"'*' patches=1 dynaPatches=0') pat_ok=1 ;;
+	*) pat_ok=0 ;;
+esac
+case "$dyn_nat|$dyn_box" in
+	*' dynaPatches=1|'*' dynaPatches=1') dyn_ok=1 ;;
+	*) dyn_ok=0 ;;
+esac
+if [ "$pat_ok" = 1 ] && [ "$dyn_ok" = 1 ]; then
+	report "gamedb:patches" PASS "Black (SLES-53886) carries its one patch and SCES-51607 its one pattern to replace, in both flavors"
+else
+	report "gamedb:patches" FAIL "native: [$pat_nat] [$dyn_nat] sandbox: [$pat_box] [$dyn_box]"
+fi
+
 # ---- what content there is -------------------------------------------------
 bios="${CHIMERA_PS2_BIOS:-}"
 if [ -z "$bios" ]; then
@@ -408,6 +433,7 @@ if [ -z "$bios" ]; then
 	report "gun:aims" SKIP "needs a bios as well as a GunCon 2 disc"
 	report "ports:columns" SKIP "needs a bios"
 	report "gs:rounding" SKIP "needs a bios"
+	report "patch:memory" SKIP "needs a bios: would prove a patch from the database reaches the console's memory"
 	report "disc:boots" SKIP "needs a bios as well as a disc"
 	report "disc:equivalence" SKIP "needs a bios as well as a disc"
 	# the NAMCO boards carry their own bios, so their legs do not depend on the
@@ -463,6 +489,29 @@ elif [ "${fp_nat%% *}" = 00001f80 ] && [ "${fp_box%% *}" = 00001f80 ] && [ "${fp
 	report "gs:rounding" PASS "the GS runs with the default rounding (${fp_nat%% *}) on a thread that had the console's (${fp_nat##* }), in both flavors"
 else
 	report "gs:rounding" FAIL "the GS runs with [$fp_nat] natively and [$fp_box] in the sandbox (wanted 00001f80, on a thread with another)"
+fi
+
+# A patch from the database reaches the console's memory. The core is asked
+# what the patches of one title do to one word (the patch_probe question, which
+# like gamedb_probe is not a setting): after the first frame it loads that
+# title's patches as PCSX2 loads them for a disc - from the database compiled
+# into the core, through PCSX2's own reader - applies them as PCSX2 applies
+# them, and prints the word before and after. Black's patch writes 4b000460 at
+# 0037EBD4, and with an empty tray nothing else has written there. A core with
+# the compatibility patches off, which is how this one was until 2026-10-13,
+# answers after=00000000.
+wp="$work/bios-patch"
+mkdir -p "$wp"
+cp "$bios" "$wp/bios.bin"
+printf '{"verbose":true,"patch_probe":"SLES-53886:ADDFF505:0037EBD4"}' > "$wp/settings"
+patch_of() { sed -n 's/.*\(Patch probe: .*\)/\1/p' <<< "$1" | head -1; }
+pp_nat="$(patch_of "$("$nat/run-native" "$wp" --frames 3 2>&1 | plain)")"
+pp_box="$(patch_of "$("$nat/run-wbx" "$gst/core.wbx" "$wp" --frames 3 2>&1 | plain)")"
+want="Patch probe: SLES-53886 ADDFF505 0037ebd4 before=00000000 after=4b000460"
+if [ "$pp_nat" = "$want" ] && [ "$pp_box" = "$want" ]; then
+	report "patch:memory" PASS "Black's patch from the database is in the console's memory after a frame (0037EBD4: 00000000 -> 4b000460), in both flavors"
+else
+	report "patch:memory" FAIL "native [$pp_nat] sandbox [$pp_box], wanted [$want]"
 fi
 
 # The OTHER cpu core: every leg above ran the recompilers (the default), so

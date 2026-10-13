@@ -12,12 +12,9 @@
  * undo: if PCSX2 starts calling something new, the link fails and someone
  * decides, instead of a patch quietly not applying.
  *
- * Two of these are refusals on purpose rather than for want of a dependency:
- *
- *   Patch:: is the game-fix database - per-game code changes keyed by disc
- *   serial. A machine that silently rewrites the game's code is not a machine
- *   a movie can be replayed on somewhere else, so a Chimera project states
- *   what it wants and nothing else is applied.
+ * One of these is a refusal on purpose rather than for want of a dependency
+ * (Patch:: was another until 2026-10-13: the compatibility patches are
+ * PCSX2's own code now, extern/pcsx2/pcsx2/Patch.cpp):
  *
  *   VU_Thread:: is MTVU, which runs a vector unit on a second thread. There is
  *   one thread here, and there would need to be one anyway: a movie cannot
@@ -124,20 +121,6 @@ namespace GSCapture
 		return handle;
 	}
 } // namespace GSCapture
-
-/* ---------------------------------------------------------------------------
- * The game-patch database: per-game code changes keyed by disc serial. A
- * machine that silently rewrites the game's code is not one a movie replays
- * elsewhere.
- */
-namespace Patch
-{
-	void ApplyPatchSettingOverrides() {}
-	bool ReloadPatchAffectingOptions() { return false; }
-	void ApplyBootPatches() {}
-	void ApplyDynamicPatches(u32 pc) {}
-	void ApplyVsyncPatches() {}
-} // namespace Patch
 
 /* ---------------------------------------------------------------------------
  * MTVU: a vector unit on a second thread. There is one thread here, and a

@@ -51,6 +51,7 @@
 #include "Host.h"
 #include "IopMem.h"
 #include "Memory.h"
+#include "Patch.h"
 #include "SIO/Memcard/MemoryCardFile.h"
 #include "SIO/Pad/Pad.h"
 #include "SIO/Pad/PadDualshock2.h"
@@ -65,6 +66,7 @@
 #include "common/Error.h"
 #include "common/FileSystem.h"
 #include "common/FPControl.h"
+#include "common/StringUtil.h"
 #include "fmt/format.h"
 #include "common/SettingsInterface.h"
 #ifdef CHIMERA_ARCADE
@@ -997,15 +999,22 @@ static void ApplySettings(SettingsInterface& si, bool verbose)
 	/* No MTVU: a vector unit on a second thread, and there is one thread. */
 	si.SetBoolValue("EmuCore/Speedhacks", "vuThread", false);
 
-	/* PCSX2's own recording tools stay off; Chimera records the movie. Its
-	 * patch database stays off because a machine that rewrites the game's code
-	 * behind a movie's back is not one the movie replays on. */
+	/* PCSX2's own recording tools stay off; Chimera records the movie.
+	 *
+	 * The compatibility patches are ON, as they are in PCSX2 (user-decided,
+	 * 2026-10-13): the corrections to a game's own code that PCSX2's game
+	 * database carries for the games that do not run right without them
+	 * (Black's collisions, for one). They are compiled into the core with the
+	 * rest of that database, so the package a movie cites pins them. What
+	 * stays off is everything a person chooses: cheats, widescreen and
+	 * no-interlacing patches, and any patch from a file - there is no folder
+	 * of patch files in a core (patch 0028). */
 	si.SetBoolValue("EmuCore", "EnableRecordingTools", false);
 	si.SetBoolValue("EmuCore", "EnableDiscordPresence", false);
 	si.SetBoolValue("EmuCore", "EnableCheats", false);
 	si.SetBoolValue("EmuCore", "EnableWideScreenPatches", false);
 	si.SetBoolValue("EmuCore", "EnableNoInterlacingPatches", false);
-	si.SetBoolValue("EmuCore", "EnablePatches", false);
+	si.SetBoolValue("EmuCore", "EnablePatches", true);
 	si.SetBoolValue("EmuCore", "SaveStateOnShutdown", false);
 
 	/* The memory cards.
@@ -1307,6 +1316,8 @@ static const char* MountArcadeMedia(VMBootParameters& boot, bool verbose)
 
 /* what this core knows about one disc serial (waterbox/game-database.cpp) */
 void ChimeraGameDBProbe(const std::string_view serial);
+/* the patch probe's question (ChimeraPatchProbe, further down) */
+static char g_patchProbe[64];
 
 /* ---------------------------------------------------------------------------
  * the chimera guest ABI is a C ABI: the adapter looks these up by name
@@ -1432,6 +1443,10 @@ ECL_EXPORT int Init(void)
 		{
 			ChimeraGameDBProbe(probe);
 		}
+		/* ...and what its patches do to a word of memory, asked after the
+		 * first frame (ChimeraPatchProbe) */
+		if (!wbx_setting_str("patch_probe", g_patchProbe, sizeof(g_patchProbe)))
+			g_patchProbe[0] = '\0';
 	}
 
 	/* The disc, if the project has one. A PS2 with no disc is a PS2 sitting at
@@ -1891,6 +1906,36 @@ ECL_EXPORT void StateSaving(void)
 #endif
 }
 
+/* Another question put to the core, like gamedb_probe, and like it not a
+ * setting: "SERIAL:CRC:ADDRESS" asks what the compatibility patches of that
+ * title do to one word of the console's memory. After the first frame the
+ * title's patches are loaded as PCSX2 loads them for a disc - from the
+ * database, through its own reader - and applied as it applies them, and the
+ * word is printed as it was and as it is. It needs no disc: the memory is the
+ * same memory with an empty tray. What it proves is the whole road, from the
+ * database compiled into the core to the machine. */
+
+static void ChimeraPatchProbe(void)
+{
+	const std::string_view probe(g_patchProbe);
+	const size_t a = probe.find(':');
+	const size_t b = (a == std::string_view::npos) ? a : probe.find(':', a + 1);
+	const std::optional<u32> crc = (b == std::string_view::npos) ? std::nullopt : StringUtil::FromChars<u32>(probe.substr(a + 1, b - a - 1), 16);
+	const std::optional<u32> addr = (b == std::string_view::npos) ? std::nullopt : StringUtil::FromChars<u32>(probe.substr(b + 1), 16);
+	if (!crc.has_value() || !addr.has_value())
+	{
+		Console.WriteLn(fmt::format("Patch probe: '{}' is not SERIAL:CRC:ADDRESS", probe));
+		return;
+	}
+	const std::string serial(probe.substr(0, a));
+	const u32 before = memRead32(addr.value());
+	Patch::ReloadPatches(serial, crc.value(), true, false, false, false);
+	Patch::ApplyBootPatches();
+	Patch::ApplyVsyncPatches();
+	Console.WriteLn(fmt::format("Patch probe: {} {:08X} {:08x} before={:08x} after={:08x}", serial, crc.value(),
+		addr.value(), before, memRead32(addr.value())));
+}
+
 ECL_EXPORT void FrameAdvance(uint64_t packed)
 {
 	/* Two input channels, and a frame is the UNION of them: the first 64
@@ -1924,6 +1969,12 @@ ECL_EXPORT void FrameAdvance(uint64_t packed)
 #endif
 	VMManager::FrameAdvance(1);
 	VMManager::Execute();
+
+	if (g_patchProbe[0] != '\0')
+	{
+		ChimeraPatchProbe();
+		g_patchProbe[0] = '\0';
+	}
 
 	g_nsamples = ChimeraAudioPull(g_soundOut, MAX_SAMPLES);
 }

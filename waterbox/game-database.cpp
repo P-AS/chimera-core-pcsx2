@@ -19,9 +19,10 @@
  * core's identity, and the package sha1 a movie cites pins it as exactly as it
  * pins the emulator. Two runs of the same core read the same database, and a
  * pin bump that changes the database changes the core, which a movie already
- * notices. What stays refused is the part that rewrites the GAME: the patches
- * and dynaPatches the database also carries are not compiled in, EnablePatches
- * is off, and Patch:: is stubbed (waterbox/stubs/frontend.cpp).
+ * notices. The same holds for the part that rewrites the GAME, the patches and
+ * dynaPatches the database also carries: they were refused here at first and
+ * are carried since 2026-10-13 (user-decided: "On, as on upstream"), for the
+ * same reason - they are compiled in, so the package pins them.
  *
  * WHAT THIS FILE IS. Upstream parses the yaml with rapidyaml, which it takes
  * from the system; a guest build has no system to take it from. So the tree is
@@ -45,6 +46,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <vector>
 
 /* the blob, generated from the pinned submodule's GameIndex.yaml */
 extern const char* ChimeraGameDB(size_t* size);
@@ -204,6 +206,72 @@ namespace
 		}
 		entry.gsHWFixes.emplace_back(id.value(), value.value());
 	}
+
+	/* A patch: upstream's pnach text, for one checksum of the program or for
+	 * any ("default", kept under 0). The generator escaped what a line cannot
+	 * hold. */
+	void AddPatch(GameDatabaseSchema::GameEntry& entry, std::string_view crc_str, const Field& f, const std::string_view serial)
+	{
+		const std::optional<u32> crc = (StringUtil::compareNoCase(crc_str, "default")) ? std::optional<u32>(0) : StringUtil::FromChars<u32>(crc_str, 16);
+		if (!crc.has_value())
+		{
+			Console.Error(fmt::format("GameDB: Invalid CRC '{}' found for serial: '{}'. Skipping!", crc_str, serial));
+			return;
+		}
+		if (entry.patches.find(crc.value()) != entry.patches.end())
+		{
+			Console.Error(fmt::format("GameDB: Duplicate CRC '{}' found for serial: '{}'. Skipping, CRCs are case-insensitive!", crc_str, serial));
+			return;
+		}
+		std::string patch;
+		patch.reserve(f.value.size());
+		for (size_t i = 0; i < f.value.size(); i++)
+		{
+			const char c = f.value[i];
+			if (c != '\\' || i + 1 == f.value.size())
+			{
+				patch.push_back(c);
+				continue;
+			}
+			const char next = f.value[++i];
+			patch.push_back(next == 'n' ? '\n' : next == 't' ? '\t' : next);
+		}
+		entry.patches.emplace(crc.value(), std::move(patch));
+	}
+
+	/* "offset:value,offset:value" in decimal */
+	bool ParseDynaRows(std::string_view text, std::vector<Patch::DynamicPatchEntry>& out)
+	{
+		while (!text.empty())
+		{
+			const size_t comma = text.find(',');
+			const std::string_view row = text.substr(0, comma);
+			text = (comma == std::string_view::npos) ? std::string_view() : text.substr(comma + 1);
+			const size_t colon = row.find(':');
+			if (colon == std::string_view::npos)
+				return false;
+			const std::optional<u32> offset = StringUtil::FromChars<u32>(row.substr(0, colon));
+			const std::optional<u32> value = StringUtil::FromChars<u32>(row.substr(colon + 1));
+			if (!offset.has_value() || !value.has_value())
+				return false;
+			out.push_back(Patch::DynamicPatchEntry{offset.value(), value.value()});
+		}
+		return true;
+	}
+
+	/* A pattern of instructions and what replaces it: "pattern/replacement". */
+	void AddDynaPatch(GameDatabaseSchema::GameEntry& entry, const Field& f, const std::string_view serial)
+	{
+		const size_t slash = f.value.find('/');
+		Patch::DynamicPatch patch;
+		if (slash == std::string_view::npos || !ParseDynaRows(f.value.substr(0, slash), patch.pattern) ||
+			!ParseDynaRows(f.value.substr(slash + 1), patch.replacement))
+		{
+			Console.Error(fmt::format("GameDB: Invalid dynaPatch '{}' for serial: '{}'. Skipping!", f.value, serial));
+			return;
+		}
+		entry.dynaPatches.push_back(std::move(patch));
+	}
 } // namespace
 
 void ChimeraInitGameDB(std::unordered_map<std::string, GameDatabaseSchema::GameEntry>& db)
@@ -299,6 +367,14 @@ void ChimeraInitGameDB(std::unordered_map<std::string, GameDatabaseSchema::GameE
 		{
 			entry.memcardFilters.emplace_back(f.value);
 		}
+		else if (InGroup(f, "patches", key))
+		{
+			AddPatch(entry, key, f, serial);
+		}
+		else if (f.key == "dynaPatch")
+		{
+			AddDynaPatch(entry, f, serial);
+		}
 		else
 		{
 			Console.Error(fmt::format("GameDB: Unknown field '{}' for serial '{}'.", f.key, serial));
@@ -342,10 +418,10 @@ void ChimeraGameDBProbe(const std::string_view serial)
 
 	Console.WriteLn(fmt::format(
 		"GameDB probe: {} name=\"{}\" eeRound={} eeDivRound={} vu0Round={} vu1Round={} "
-		"eeClamp={} vu0Clamp={} vu1Clamp={} gameFixes=[{}] speedHacks={} gsHWFixes={}",
+		"eeClamp={} vu0Clamp={} vu1Clamp={} gameFixes=[{}] speedHacks={} gsHWFixes={} patches={} dynaPatches={}",
 		serial, entry->name, round(entry->eeRoundMode), round(entry->eeDivRoundMode),
 		round(entry->vu0RoundMode), round(entry->vu1RoundMode),
 		static_cast<int>(entry->eeClampMode), static_cast<int>(entry->vu0ClampMode),
 		static_cast<int>(entry->vu1ClampMode), fixes, entry->speedHacks.size(),
-		entry->gsHWFixes.size()));
+		entry->gsHWFixes.size(), entry->patches.size(), entry->dynaPatches.size()));
 }

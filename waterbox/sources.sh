@@ -10,13 +10,14 @@
 # or a settings dialog should not.
 #
 # What is deliberately absent, and why:
-#   GameList.cpp, Patch.cpp                       a library of somebody's
-#                                                 files, and code changes made
-#                                                 behind a movie's back.
-#                                                 GameDatabase.cpp IS here -
-#                                                 the per-title fixes are the
-#                                                 machine's, and its data is
-#                                                 compiled in by
+#   GameList.cpp                                  a library of somebody's
+#                                                 files.
+#                                                 GameDatabase.cpp and
+#                                                 Patch.cpp ARE here - the
+#                                                 per-title fixes and the
+#                                                 compatibility patches are
+#                                                 the machine's, and their
+#                                                 data is compiled in by
 #                                                 waterbox/gen-gamedb.py
 #   GS/Renderers/{Vulkan,DX11,DX12,Metal}         no GPU in a sandbox
 #   GS/Renderers/{OpenGL,HW}                      built only when this core is
@@ -55,7 +56,7 @@ core_srcs() {
 		-e "MTVU.cpp$" \
 		-e "BuildVersion.cpp$" \
 		-e "ImGui" -e "Achievements" -e "Recording" \
-		-e "GameList" -e "Patch" \
+		-e "GameList" \
 		-e "SysForwardDefs" -e "USB" -e "DEV9" \
 		-e "IopModuleNames" \
 		-e "SaveState"      # savestates: the sandbox snapshots the whole guest
