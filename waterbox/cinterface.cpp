@@ -64,6 +64,7 @@
 #include "common/Console.h"
 #include "common/Error.h"
 #include "common/FileSystem.h"
+#include "common/FPControl.h"
 #include "fmt/format.h"
 #include "common/SettingsInterface.h"
 #ifdef CHIMERA_ARCADE
@@ -1818,7 +1819,10 @@ static void ChimeraCheckGLContext()
 		 * back what a state carried of them (gs-shadow.cpp, chimera issue
 		 * 190); a rebuild for any other reason has nothing to give them, and
 		 * is GSreopen's "we lost the device" as it always was. */
-		ChimeraGSShadowRebuild(afterLoad);
+		{
+			const FPControlRegisterBackup gs_rounding(FPControlRegister::GetDefault()); /* GS work: see below */
+			ChimeraGSShadowRebuild(afterLoad);
+		}
 #ifdef CHIMERA_GUEST_VK
 		s_chimera_vulkan_quiet = false;
 #endif
@@ -1851,7 +1855,10 @@ ECL_EXPORT void StateLoaded(void)
 {
 #ifdef CHIMERA_GUEST_GL
 	s_chimera_gl_state_loaded = true;
-	ChimeraGSShadowStateLoaded();
+	{
+		const FPControlRegisterBackup gs_rounding(FPControlRegister::GetDefault());
+		ChimeraGSShadowStateLoaded();
+	}
 #endif
 }
 
@@ -1870,7 +1877,17 @@ ECL_EXPORT void StateSaving(void)
 	const uint64_t live = ChimeraLiveContext();
 	if (live == 0 || live != s_chimera_gl_context)
 		return;
-	ChimeraGSShadowSave();
+	{
+		/* GS WORK DONE FROM HERE HAS THE GS'S ROUNDING TOO. The GS's own
+		 * commands get it where they are drained (patch 0004, MTGS.cpp, which
+		 * says why: the console's CPU thread rounds toward zero and the GS's
+		 * arithmetic is the host's). What this file asks of the renderer
+		 * directly - copy the targets out, make them again after a load, read
+		 * the frame back - is the same renderer doing the same sums, and a
+		 * picture given back after a load must be the one that was drawn. */
+		const FPControlRegisterBackup gs_rounding(FPControlRegister::GetDefault());
+		ChimeraGSShadowSave();
+	}
 #endif
 }
 
@@ -1900,7 +1917,10 @@ ECL_EXPORT void FrameAdvance(uint64_t packed)
 	 * vsync boundary pauses the machine. */
 #ifdef CHIMERA_GUEST_GL
 	ChimeraCheckGLContext();
-	ChimeraGSShadowFrameBegins();
+	{
+		const FPControlRegisterBackup gs_rounding(FPControlRegister::GetDefault());
+		ChimeraGSShadowFrameBegins();
+	}
 #endif
 	VMManager::FrameAdvance(1);
 	VMManager::Execute();
@@ -1922,6 +1942,7 @@ ECL_EXPORT uint32_t* GetVideoBgra(void)
 {
 	const u8* bits = nullptr;
 	int pitch = 0, width = 0, height = 0;
+	const FPControlRegisterBackup gs_rounding(FPControlRegister::GetDefault()); /* GS work: see StateSaving */
 	if (!ChimeraGSGetFrame(&bits, &pitch, &width, &height))
 		return g_video;
 

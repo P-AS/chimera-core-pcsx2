@@ -1,8 +1,8 @@
 diff --git a/pcsx2/MTGS.cpp b/pcsx2/MTGS.cpp
-index 98b453c..35d6b77 100644
+index 98b453c..481910a 100644
 --- a/pcsx2/MTGS.cpp
 +++ b/pcsx2/MTGS.cpp
-@@ -115,6 +115,49 @@ bool MTGS::IsOpen()
+@@ -115,6 +115,74 @@ bool MTGS::IsOpen()
  	return s_open_flag.load(std::memory_order_acquire);
  }
  
@@ -17,11 +17,34 @@ index 98b453c..35d6b77 100644
 + * These five entry points are all that separates the two arrangements. The
 + * ring buffer, the packet formats and the GS itself are untouched.
 + */
++/* THE GS'S OWN FLOATING POINT. Upstream's GS thread sets the processor's
++ * rounding to the default as its first act (ThreadEntryPoint below: "nearest,
++ * FTZ off"), because the thread that emulates the console's CPU runs with the
++ * PlayStation 2's rounding - toward zero, denormals flushed - and the GS's
++ * arithmetic is the host's, not the console's. Here the GS runs where that
++ * thread stands, so without this it did its sums with the console's rounding:
++ * a texture scale of 1.6 came out as 1.5999999, every vertex a hair to one
++ * side, and a draw that copies one buffer onto another texel for texel took
++ * its neighbour's bits. Black's haze was that (chimera issue 257): the top
++ * bit of the depth it moves into the picture's alpha came out zero. So the
++ * GS's rounding is put on for as long as the GS runs, and the console's put
++ * back. */
 +void MTGS::PumpInline()
 +{
 +	if (!s_open_flag.load(std::memory_order_acquire))
 +		return;
 +
++	const FPControlRegister cpu_fpcr = FPControlRegister::GetCurrent();
++	const FPControlRegisterBackup fpcr(FPControlRegister::GetDefault());
++	// Said once, the first time the thread comes here with a rounding of its
++	// own: what the core's test script reads (gs:rounding).
++	static bool s_said_fpcr = false;
++	if (!s_said_fpcr && cpu_fpcr != FPControlRegister::GetDefault())
++	{
++		s_said_fpcr = true;
++		Console.WriteLn("chimera: the GS runs with floating point control %08x; the thread it runs on had %08x",
++			FPControlRegister::GetCurrent().bitmask, cpu_fpcr.bitmask);
++	}
 +	std::unique_lock mtvu_lock(s_mtx_RingBufferBusy2);
 +	ProcessRingBuffer(mtvu_lock);
 +}
@@ -32,6 +55,7 @@ index 98b453c..35d6b77 100644
 +		return;
 +
 +	std::memcpy(RingBuffer.Regs, PS2MEM_GS, sizeof(PS2MEM_GS));
++	const FPControlRegisterBackup fpcr(FPControlRegister::GetDefault());
 +	const bool opened = GSopen(EmuConfig.GS, EmuConfig.GS.Renderer, RingBuffer.Regs,
 +		VMManager::GetEffectiveVSyncMode(), VMManager::ShouldAllowPresentThrottle());
 +	s_open_flag.store(opened, std::memory_order_release);
@@ -46,13 +70,14 @@ index 98b453c..35d6b77 100644
 +	PumpInline();
 +	s_open_flag.store(false, std::memory_order_release);
 +	s_shutdown_flag.store(true, std::memory_order_release);
++	const FPControlRegisterBackup fpcr(FPControlRegister::GetDefault());
 +	GSclose();
 +}
 +#else
  void MTGS::StartThread()
  {
  	if (s_thread.Joinable())
-@@ -140,6 +183,7 @@ void MTGS::ShutdownThread()
+@@ -140,6 +208,7 @@ void MTGS::ShutdownThread()
  	s_sem_event.NotifyOfWork();
  	s_thread.Join();
  }
@@ -60,7 +85,7 @@ index 98b453c..35d6b77 100644
  
  void MTGS::ThreadEntryPoint()
  {
-@@ -274,6 +318,13 @@ void MTGS::PostVsyncStart(bool registers_written)
+@@ -274,6 +343,13 @@ void MTGS::PostVsyncStart(bool registers_written)
  	if ((s_QueuedFrameCount.fetch_add(1) < EmuConfig.GS.VsyncQueueSize) /*|| (!EmuConfig.GS.VsyncEnable && !EmuConfig.GS.FrameLimitEnable)*/)
  		return;
  
@@ -74,7 +99,7 @@ index 98b453c..35d6b77 100644
  	s_VsyncSignalListener.store(true, std::memory_order_release);
  	//Console.WriteLn( Color_Blue, "(EEcore Sleep) Vsync\t\tringpos=0x%06x, writepos=0x%06x", m_ReadPos.load(), m_WritePos.load() );
  
-@@ -311,294 +362,309 @@ union PacketTagType
+@@ -311,294 +387,309 @@ union PacketTagType
  	};
  };
  
@@ -111,6 +136,14 @@ index 98b453c..35d6b77 100644
 -	while (true)
 -	{
 -		if (s_run_idle_flag.load(std::memory_order_acquire) && VMManager::GetState() != VMState::Running && GSHasDisplayWindow())
+-		{
+-			if (!s_sem_event.CheckForWork())
+-			{
+-				GSPresentCurrentFrame();
+-				GSThrottlePresentation();
+-			}
+-		}
+-		else
 +#ifdef RINGBUF_DEBUG_STACK
 +		// pop a ringpos off the stack.  It should match this one!
 +
@@ -118,28 +151,20 @@ index 98b453c..35d6b77 100644
 +		uptr stackpos = ringposStack.back();
 +		if (stackpos != local_ReadPos)
  		{
--			if (!s_sem_event.CheckForWork())
--			{
--				GSPresentCurrentFrame();
--				GSThrottlePresentation();
--			}
-+			Console.Error("MTGS Ringbuffer Critical Failure ---> %x to %x (prevCmd: %x)\n", stackpos, local_ReadPos, prevCmd.command);
- 		}
--		else
--		{
 -			mtvu_lock.unlock();
 -			s_sem_event.WaitForWork();
 -			mtvu_lock.lock();
--		}
--
--		if (!s_open_flag.load(std::memory_order_acquire))
--			break;
++			Console.Error("MTGS Ringbuffer Critical Failure ---> %x to %x (prevCmd: %x)\n", stackpos, local_ReadPos, prevCmd.command);
+ 		}
 +		pxAssert(stackpos == local_ReadPos);
 +		prevCmd = tag;
 +		ringposStack.pop_back();
 +		s_lock_Stack.Release();
 +#endif
  
+-		if (!s_open_flag.load(std::memory_order_acquire))
+-			break;
+-
 -		// note: m_ReadPos is intentionally not volatile, because it should only
 -		// ever be modified by this thread.
 -		while (s_ReadPos.load(std::memory_order_relaxed) != s_WritePos.load(std::memory_order_acquire))
@@ -197,12 +222,11 @@ index 98b453c..35d6b77 100644
 -					uint datapos = (local_ReadPos + 1) & RingBufferMask;
 -					const int qsize = tag.data[0];
 -					const u128* data = &RingBuffer[datapos];
+-
+-					MTGS_LOG("(MTGS Packet Read) ringtype=P1, qwc=%u", qsize);
 +				uint datapos = (local_ReadPos + 1) & RingBufferMask;
 +				const int qsize = tag.data[0];
 +				const u128* data = &RingBuffer[datapos];
- 
--					MTGS_LOG("(MTGS Packet Read) ringtype=P1, qwc=%u", qsize);
-+				MTGS_LOG("(MTGS Packet Read) ringtype=P2, qwc=%u", qsize);
  
 -					uint endpos = datapos + qsize;
 -					if (endpos >= RingBufferSize)
@@ -216,7 +240,8 @@ index 98b453c..35d6b77 100644
 -					{
 -						GSgifTransfer((u8*)data, qsize);
 -					}
--
++				MTGS_LOG("(MTGS Packet Read) ringtype=P2, qwc=%u", qsize);
+ 
 -					ringposinc += qsize;
 +				uint endpos = datapos + qsize;
 +				if (endpos >= RingBufferSize)
@@ -371,42 +396,42 @@ index 98b453c..35d6b77 100644
 -						{
 -							const int qsize = tag.data[0];
 -							ringposinc += qsize;
--
--							MTGS_LOG("(MTGS Packet Read) ringtype=Vsync, field=%u, skip=%s", !!(((u32&)RingBuffer.Regs[0x1000]) & 0x2000) ? 0 : 1, tag.data[1] ? "true" : "false");
 +						const int qsize = tag.data[0];
 +						ringposinc += qsize;
+ 
+-							MTGS_LOG("(MTGS Packet Read) ringtype=Vsync, field=%u, skip=%s", !!(((u32&)RingBuffer.Regs[0x1000]) & 0x2000) ? 0 : 1, tag.data[1] ? "true" : "false");
++						MTGS_LOG("(MTGS Packet Read) ringtype=Vsync, field=%u, skip=%s", !!(((u32&)RingBuffer.Regs[0x1000]) & 0x2000) ? 0 : 1, tag.data[1] ? "true" : "false");
  
 -							// Mail in the important GS registers.
 -							// This seemingly obtuse system is needed in order to handle cases where the vsync data wraps
 -							// around the edge of the ringbuffer.  If not for that I'd just use a struct. >_<
-+						MTGS_LOG("(MTGS Packet Read) ringtype=Vsync, field=%u, skip=%s", !!(((u32&)RingBuffer.Regs[0x1000]) & 0x2000) ? 0 : 1, tag.data[1] ? "true" : "false");
- 
--							uint datapos = (local_ReadPos + 1) & RingBufferMask;
--							MemCopy_WrappedSrc(RingBuffer.m_Ring, datapos, RingBufferSize, (u128*)RingBuffer.Regs, 0xf);
 +						// Mail in the important GS registers.
 +						// This seemingly obtuse system is needed in order to handle cases where the vsync data wraps
 +						// around the edge of the ringbuffer.  If not for that I'd just use a struct. >_<
+ 
+-							uint datapos = (local_ReadPos + 1) & RingBufferMask;
+-							MemCopy_WrappedSrc(RingBuffer.m_Ring, datapos, RingBufferSize, (u128*)RingBuffer.Regs, 0xf);
++						uint datapos = (local_ReadPos + 1) & RingBufferMask;
++						MemCopy_WrappedSrc(RingBuffer.m_Ring, datapos, RingBufferSize, (u128*)RingBuffer.Regs, 0xf);
  
 -							u32* remainder = (u32*)&RingBuffer[datapos];
 -							((u32&)RingBuffer.Regs[0x1000]) = remainder[0];
 -							((u32&)RingBuffer.Regs[0x1010]) = remainder[1];
 -							((GSRegSIGBLID&)RingBuffer.Regs[0x1080]) = (GSRegSIGBLID&)remainder[2];
-+						uint datapos = (local_ReadPos + 1) & RingBufferMask;
-+						MemCopy_WrappedSrc(RingBuffer.m_Ring, datapos, RingBufferSize, (u128*)RingBuffer.Regs, 0xf);
- 
--							// CSR & 0x2000; is the pageflip id.
--							GSvsync((((u32&)RingBuffer.Regs[0x1000]) & 0x2000) ? 0 : 1, remainder[4] != 0);
 +						u32* remainder = (u32*)&RingBuffer[datapos];
 +						((u32&)RingBuffer.Regs[0x1000]) = remainder[0];
 +						((u32&)RingBuffer.Regs[0x1010]) = remainder[1];
 +						((GSRegSIGBLID&)RingBuffer.Regs[0x1080]) = (GSRegSIGBLID&)remainder[2];
  
--							s_QueuedFrameCount.fetch_sub(1);
--							if (s_VsyncSignalListener.exchange(false))
--								s_sem_Vsync.Post();
+-							// CSR & 0x2000; is the pageflip id.
+-							GSvsync((((u32&)RingBuffer.Regs[0x1000]) & 0x2000) ? 0 : 1, remainder[4] != 0);
 +						// CSR & 0x2000; is the pageflip id.
 +						GSvsync((((u32&)RingBuffer.Regs[0x1000]) & 0x2000) ? 0 : 1, remainder[4] != 0);
  
+-							s_QueuedFrameCount.fetch_sub(1);
+-							if (s_VsyncSignalListener.exchange(false))
+-								s_sem_Vsync.Post();
+-
 -							// Do not StateCheckInThread() here
 -							// Otherwise we could pause while there's still data in the queue
 -							// Which could make the MTVU thread wait forever for it to empty
@@ -606,7 +631,7 @@ index 98b453c..35d6b77 100644
  	}
  
  	// Unblock any threads in WaitGS in case MTGS gets cancelled while still processing work
-@@ -616,6 +682,15 @@ void MTGS::WaitGS(bool syncRegs, bool weakWait, bool isMTVU)
+@@ -616,6 +707,15 @@ void MTGS::WaitGS(bool syncRegs, bool weakWait, bool isMTVU)
  	if (!IsOpen()) [[unlikely]]
  		return;
  
@@ -622,7 +647,7 @@ index 98b453c..35d6b77 100644
  	Gif_Path& path = gifUnit.gifPath[GIF_PATH_1];
  
  	// Both m_ReadPos and m_WritePos can be relaxed as we only want to test if the queue is empty but
-@@ -662,8 +737,13 @@ void MTGS::WaitGS(bool syncRegs, bool weakWait, bool isMTVU)
+@@ -662,8 +762,13 @@ void MTGS::WaitGS(bool syncRegs, bool weakWait, bool isMTVU)
  // For use in loops that wait on the GS thread to do certain things.
  void MTGS::SetEvent()
  {
@@ -636,7 +661,7 @@ index 98b453c..35d6b77 100644
  }
  
  u8* MTGS::GetDataPacketPtr()
-@@ -880,6 +960,13 @@ bool MTGS::WaitForOpen()
+@@ -880,6 +985,13 @@ bool MTGS::WaitForOpen()
  
  	StartThread();
  
@@ -650,7 +675,7 @@ index 98b453c..35d6b77 100644
  	// request open, and kick the thread.
  	s_open_flag.store(true, std::memory_order_release);
  	s_sem_event.NotifyOfWork();
-@@ -900,6 +987,11 @@ void MTGS::WaitForClose()
+@@ -900,6 +1012,11 @@ void MTGS::WaitForClose()
  	if (!IsOpen())
  		return;
  

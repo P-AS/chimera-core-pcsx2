@@ -961,6 +961,70 @@ Not measured: a game played with input, anything above 2x, and any card other
 than this one. `vk:` checks in the test script run on lavapipe, which is not a
 graphics card.
 
+## The GS's floating point (2026-10-13, chimera#257)
+
+Black drew a white haze over everything far away under both hardware
+renderers, at every internal resolution, and was right under the software
+renderer. PCSX2 itself draws it right with the same source this core builds:
+checked by writing a GS dump of the scene from this core (four frames of the
+GS's own commands) and replaying it in upstream's release v2.7.524 with its
+OpenGL renderer on the same software driver (llvmpipe). Upstream: clean.
+This core's OpenGL renderer replaying the same dump: the haze.
+
+**What it was.** The thread that emulates the console's CPU runs with the
+PlayStation 2's floating point rounding: toward zero, denormals flushed.
+Upstream's GS has a thread of its own, and the first thing that thread does
+is put the default rounding on - its comment says the console's "appears to
+get inherited" otherwise. Here the GS runs on the CPU's thread (patch 0004,
+"the GS runs inline"), and nothing put the default on. So the hardware
+renderers computed with the console's rounding: a texture scale of 1.6 came
+out as 1.5999999, a vertex scale of 0.0001953125 as 0.00019531249. Found by
+making both programs write upstream's own per-draw configuration dump
+(`SaveHWConfig`) for the same twelve draws: everything was the same except
+those numbers, each one step low.
+
+In Black it shows because the game copies the top bits of its depth buffer
+into the picture's alpha, texel for texel, and then lays fog over the picture
+through that alpha. With every coordinate a hair off the copy took the
+neighbouring half of each depth value: the top bit came out zero for every
+pixel (read back from the card: 196,032 and 131,648 pixels in the two lower
+quarters of the alpha range, none in the upper two, where the software
+renderer has 86,880 and 48,079).
+
+**The change** (patch 0004, `MTGS.cpp`, and `waterbox/cinterface.cpp`). The
+GS's rounding is put on for as long as the GS runs - while it drains its
+commands, opens and closes, and where the core asks the renderer for
+something directly (the targets copied out for a savestate and made again
+after a load, the frame read back) - and the CPU's is put back after. The
+second half was found by the tests: with only the first, a picture given
+back after a load under Vulkan was no longer bit for bit the one drawn. The core says once which rounding it found and
+which it runs with ("the GS runs with floating point control 00001f80; the
+thread it runs on had 0000ffe0").
+
+**It is not only Black, and not only the hardware renderers.** Every sum the
+GS does in floating point was done with that rounding, the software
+renderer's included, so pictures can change by a pixel's worth anywhere. A
+game that reads its picture back reads those pixels: a movie made with an
+earlier build may not play back the same.
+
+**Tested.** The game itself on a GeForce GTX 1060, at the window the
+report's scene looks out of: Vulkan at 1x and at 4x and OpenGL are the
+software renderer's picture to within a level or two of mean colour (blue
+45.1 against 45.3; before, 52.5), and Vulkan and OpenGL are the same file.
+The dump replayed in this core's OpenGL renderer after the
+change is upstream's picture (mean colour 82.9, 76.8, 45.6 against
+upstream's 83.4, 77.3, 46.2; before: 85.3, 79.9, 53.0), and the alpha read
+back from the card has the software renderer's counts. New check
+`gs:rounding` reads the core's line in both flavors; with the change taken
+out the line reads `0000ffe0 0000ffe0` and the check fails. The test
+script: 42 passed, 0 failed, 5 skipped (a light-gun disc, a graphics disc
+and the three arcade boards are not named on this machine); through
+Chimera: 3 passed, 0 failed, 1 skipped.
+
+Asked about and not the cause, each tried on the scene: PCSX2's Blending
+Accuracy at "full", its downloads from the card switched off, its per-game
+fixes switched off, the SSE4 code path against AVX2.
+
 ## What is known to be wrong, and is next
 
 - **Only one disc format is tested**: a raw 2352-byte-sector CD. CHD and CSO

@@ -407,6 +407,7 @@ if [ -z "$bios" ]; then
 	report "gun:equivalence" SKIP "would prove a machine holding a light gun runs identically in the sandbox"
 	report "gun:aims" SKIP "needs a bios as well as a GunCon 2 disc"
 	report "ports:columns" SKIP "needs a bios"
+	report "gs:rounding" SKIP "needs a bios"
 	report "disc:boots" SKIP "needs a bios as well as a disc"
 	report "disc:equivalence" SKIP "needs a bios as well as a disc"
 	# the NAMCO boards carry their own bios, so their legs do not depend on the
@@ -437,6 +438,31 @@ elif cmp -s "$work/nat.txt" "$work/box.txt"; then
 	report "bios:equivalence" PASS "$FRAMES frames of $(basename "$bios"), native == waterboxed"
 else
 	report "bios:equivalence" FAIL "$(diff "$work/nat.txt" "$work/box.txt" | tr '\n' ' ' | head -c 120)"
+fi
+
+# The GS's arithmetic is the host's, not the console's. The thread that
+# emulates the PlayStation 2's CPU runs with the console's floating point
+# rounding (toward zero, denormals flushed); upstream's GS has a thread of its
+# own with the default rounding, and here the GS runs on the CPU's thread. For
+# as long as it took the CPU's rounding the hardware renderers computed every
+# scale and vertex a hair off - 1.5999999 for 1.6 - and a draw that copies one
+# buffer onto another texel for texel took its neighbour's bits: Black drew a
+# white haze over everything far away (chimera issue 257). The core says once,
+# from inside the GS, which rounding it found and which it runs with; both
+# flavors must say the default (00001f80) for the GS and something else for
+# the thread, or the check has seen nothing.
+wr="$work/bios-rounding"
+mkdir -p "$wr"
+cp "$bios" "$wr/bios.bin"
+printf '{"verbose":true}' > "$wr/settings"
+fp_nat="$("$nat/run-native" "$wr" --frames 60 2>&1 | plain | sed -n 's/.*the GS runs with floating point control \([0-9a-f]*\); the thread it runs on had \([0-9a-f]*\).*/\1 \2/p' | head -1)"
+fp_box="$("$nat/run-wbx" "$gst/core.wbx" "$wr" --frames 60 2>&1 | plain | sed -n 's/.*the GS runs with floating point control \([0-9a-f]*\); the thread it runs on had \([0-9a-f]*\).*/\1 \2/p' | head -1)"
+if [ -z "$fp_nat" ] || [ -z "$fp_box" ]; then
+	report "gs:rounding" FAIL "the core did not say which rounding the GS runs with (native [$fp_nat] sandbox [$fp_box])"
+elif [ "${fp_nat%% *}" = 00001f80 ] && [ "${fp_box%% *}" = 00001f80 ] && [ "${fp_nat##* }" != 00001f80 ] && [ "$fp_nat" = "$fp_box" ]; then
+	report "gs:rounding" PASS "the GS runs with the default rounding (${fp_nat%% *}) on a thread that had the console's (${fp_nat##* }), in both flavors"
+else
+	report "gs:rounding" FAIL "the GS runs with [$fp_nat] natively and [$fp_box] in the sandbox (wanted 00001f80, on a thread with another)"
 fi
 
 # The OTHER cpu core: every leg above ran the recompilers (the default), so
