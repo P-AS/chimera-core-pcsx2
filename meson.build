@@ -199,6 +199,8 @@ if guest_gl
   gl_bridge_guest = custom_target('gl-bridge-guest',
     output: ['gl-bridge-guest.cpp', 'gl-bridge-ops.h', 'gl-bridge-host.inc'],
     input: files('waterbox/gl-entry-points.txt'),
+    # made again when miniBox's generator or its list changes, not only ours
+    depend_files: [mb / 'source/gl/gen-gl-bridge.py', mb / 'source/gl/gl-entry-points.txt'],
     command: [find_program('python3'), mb / 'source/gl/gen-gl-bridge.py',
       meson.current_source_dir() / fc / '3rdparty/glad/include/glad/gl.h',
       mb / 'source/gl/gl-entry-points.txt',
@@ -346,6 +348,7 @@ else
     # the same way on Linux keeps ONE dispatcher rather than two.
     gl_bridge_host = custom_target('gl-bridge-host',
       output: ['gl-bridge-host.inc', 'gl-bridge-ops.h', 'gl-bridge-guest.cpp'],
+      depend_files: [mb / 'source/gl/gen-gl-bridge.py', mb / 'source/gl/gl-entry-points.txt'],
       command: [find_program('python3'), mb / 'source/gl/gen-gl-bridge.py',
         meson.current_source_dir() / fc / '3rdparty/glad/include/glad/gl.h',
         mb / 'source/gl/gl-entry-points.txt', '@OUTDIR@'])
