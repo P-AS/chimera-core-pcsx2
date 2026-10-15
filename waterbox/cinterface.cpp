@@ -157,6 +157,24 @@ enum
 static uint8_t g_setButtons[BTN_COUNT];
 static uint8_t g_buttons[BTN_COUNT];
 
+/* ---- the discs (chimera#286) -------------------------------------------------
+ *
+ * After the slots, the console's own controls: Previous Disc and Next Disc are
+ * a selector over the project's discs, in the Disc slot's order, and Disc Swap
+ * is the tray - open for as long as it is held, and closing on the selected
+ * disc, or on the next one when the selector was not moved. The controls the
+ * other cores with discs have (DuckStation's machine-console.inc is the
+ * model). Which disc is in, which one the selector is on and whether the tray
+ * is open are the machine's, kept here, so a state carries them. */
+enum { CONSOLE_PREV_DISC, CONSOLE_NEXT_DISC, CONSOLE_DISC_SWAP, CONSOLE_COUNT };
+static constexpr int MAX_DISCS = 8;
+static char g_discs[MAX_DISCS][256];
+static int g_discCount;
+static int g_discWasInserted;
+static int g_discSelected;
+static bool g_trayOpen;
+static uint8_t g_console[CONSOLE_COUNT], g_consoleWas[CONSOLE_COUNT];
+
 /* the analog wire: two sticks for every slot, and for the two physical ports
  * the four the instruments read */
 enum
@@ -1594,6 +1612,13 @@ ECL_EXPORT int Init(void)
 		{
 			boot.filename = file;
 			boot.source_type = CDVD_SourceType::Iso;
+			/* the discs the tray can close on: this one, then the Disc slot's
+			 * others in its order */
+			snprintf(g_discs[0], sizeof(g_discs[0]), "%s", file);
+			g_discCount = 1;
+			for (int i = 1; i < wbx_slot_count("disc") && g_discCount < MAX_DISCS; i++)
+				if (wbx_slot_name("disc", i, g_discs[g_discCount], sizeof(g_discs[0])) != nullptr)
+					g_discCount++;
 		}
 	}
 	else
@@ -1631,6 +1656,8 @@ ECL_EXPORT void SetButton(int index, int value)
 #endif
 	if (index >= 0 && index < BTN_COUNT)
 		g_setButtons[index] = value ? 1 : 0;
+	else if (index >= BTN_COUNT && index < BTN_COUNT + CONSOLE_COUNT)
+		g_console[index - BTN_COUNT] = value ? 1 : 0;
 }
 
 /* WHICH DECLARED CONTROLS THIS MACHINE HAS.
@@ -1697,6 +1724,12 @@ ECL_EXPORT int IsButtonActive(int index)
 	if (chimera_arcade_present)
 		return (index >= 0 && index < ARCADE_BTN_COUNT) ? 1 : 0;
 #endif
+	/* the selector when there is more than one disc to choose from, the tray
+	 * when the machine started from a disc */
+	if (index == BTN_COUNT + CONSOLE_PREV_DISC || index == BTN_COUNT + CONSOLE_NEXT_DISC)
+		return g_discCount > 1 ? 1 : 0;
+	if (index == BTN_COUNT + CONSOLE_DISC_SWAP)
+		return g_discCount > 0 ? 1 : 0;
 	if (index < 0 || index >= BTN_COUNT) return 0;
 	for (int slot = 0; slot < PS2_SLOTS; slot++)
 	{
@@ -1947,6 +1980,51 @@ static void ChimeraPatchProbe(void)
 		addr.value(), before, memRead32(addr.value())));
 }
 
+/* Before the frame runs, with the machine stopped at its vsync. */
+static void DiscControls()
+{
+	const bool prev = g_console[CONSOLE_PREV_DISC] && !g_consoleWas[CONSOLE_PREV_DISC];
+	const bool next = g_console[CONSOLE_NEXT_DISC] && !g_consoleWas[CONSOLE_NEXT_DISC];
+	memcpy(g_consoleWas, g_console, sizeof(g_console));
+	/* PREVIOUS and NEXT choose, and touch no hardware. They wrap both ways. */
+	if (g_discCount > 1)
+	{
+		if (prev)
+			g_discSelected = (g_discSelected + g_discCount - 1) % g_discCount;
+		if (next)
+			g_discSelected = (g_discSelected + 1) % g_discCount;
+	}
+	/* DISC SWAP is the tray. Held, it is open and the drive has no disc, which
+	 * is what a game asking for its next disc waits to see. Released, the
+	 * SELECTED disc is in, as PCSX2's own Change Disc puts it in: the tray
+	 * reports open for a second, then closes and the drive reads the disc.
+	 * How long it stays open first is how long the button is held - the
+	 * player's decision, and the movie's. */
+	const bool open = g_console[CONSOLE_DISC_SWAP] != 0;
+	if (open == g_trayOpen || g_discCount == 0)
+		return;
+	g_trayOpen = open;
+	if (open)
+	{
+		VMManager::ChangeDisc(CDVD_SourceType::NoDisc, std::string());
+		return;
+	}
+	if (g_discCount > 1 && g_discSelected == g_discWasInserted)
+		g_discSelected = (g_discWasInserted + 1) % g_discCount;
+	if (VMManager::ChangeDisc(CDVD_SourceType::Iso, g_discs[g_discSelected]))
+	{
+		g_discWasInserted = g_discSelected;
+	}
+	else
+	{
+		/* PCSX2 put back what it had, which is no disc: the tray stays open,
+		 * as an empty one, until a disc that opens is chosen */
+		g_trayOpen = true;
+		fprintf(stderr, "pcsx2: disc %d (%s) will not open; the tray stays empty\n", g_discSelected + 1,
+			g_discs[g_discSelected]);
+	}
+}
+
 ECL_EXPORT void FrameAdvance(uint64_t packed)
 {
 	/* Two input channels, and a frame is the UNION of them: the first 64
@@ -1966,6 +2044,10 @@ ECL_EXPORT void FrameAdvance(uint64_t packed)
 	if (!g_loaded)
 		return;
 
+#ifdef CHIMERA_ARCADE
+	if (!chimera_arcade_present)
+#endif
+		DiscControls();
 	ApplyInput();
 	ChimeraAdvanceClock();
 

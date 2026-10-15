@@ -175,7 +175,10 @@
 			"P8 R2": "J8 B8, X8 RightTrigger",
 			"P8 L3": "J8 B11, X8 LeftStick",
 			"P8 R3": "J8 B12, X8 RightStick",
-			"P8 Analog": "J8 B13"
+			"P8 Analog": "J8 B13",
+			"Previous Disc": "LeftBracket",
+			"Next Disc": "RightBracket",
+			"Disc Swap": "Backslash"
 		},
 		"Arcade Panel": {
 			"P1 Up": "Up, J1 POV1U, X1 DpadUp, X1 LStickUp",

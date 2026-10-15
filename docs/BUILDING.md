@@ -344,6 +344,7 @@ distribute) it also runs `pad:*` and `gun:bus`, `gun:controls`,
 | Checks | Needs, besides a bios |
 | --- | --- |
 | `disc:boots`, `disc:equivalence` | a disc image: the first `*.bin` or `*.iso` in `tests/roms/` |
+| `discs:swap` | that disc and a bios; `PCSX2_SECOND_DISC` for a second game (else the first disc again, under another name): Disc Swap held for 60 frames changes the run, native == sandbox == a state around every frame, and a second "disc" that is no disc leaves the tray empty (chimera#286) |
 | `video:rasterisers` | a native build made with `-Djit_rasterizer=true` in `build/meson-jit`, or `CHIMERA_PS2_JIT_BUILD` |
 | `gun:aims` | `PCSX2_GUN_DISC`, a GunCon 2 disc |
 | `gpu:picture` | `PCSX2_GFX_DISC` (and `PCSX2_GFX_FRAMES`), `run-wbx` built with `-Dgl_bridge=true`, and a GL context |

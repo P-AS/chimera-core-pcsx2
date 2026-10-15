@@ -44,6 +44,10 @@
 #define GATE_PORTS 2
 #define GATE_SLOTS 8
 #define GATE_BTN_COUNT (GATE_PORT_BTNS * GATE_PORTS + GATE_DS2_BTNS * (GATE_SLOTS - GATE_PORTS))
+/* after the slots, the console's own: 0 Previous Disc, 1 Next Disc, 2 Disc
+ * Swap - wire GATE_BTN_COUNT and the two after it */
+#define GATE_CONSOLE_BTNS 3
+#define GATE_WIRE_COUNT (GATE_BTN_COUNT + GATE_CONSOLE_BTNS)
 #define GATE_SLOT_BASE(slot) \
 	((slot) < GATE_PORTS ? (slot) * GATE_PORT_BTNS \
 		: GATE_PORT_BTNS * GATE_PORTS + ((slot) - GATE_PORTS) * GATE_DS2_BTNS)
@@ -289,8 +293,8 @@ static int gate_run(const struct gate_core *c, const struct gate_opts *o)
 	const long hashFrom = tail + o->turboSettle;
 	uint64_t th = 0;
 	long lag = 0;
-	uint8_t buttons[GATE_BTN_COUNT];
-	uint8_t prev[GATE_BTN_COUNT];
+	uint8_t buttons[GATE_WIRE_COUNT];
+	uint8_t prev[GATE_WIRE_COUNT];
 	memset(prev, 0, sizeof prev);
 
 	for (long f = 0; f < frames; f++)
@@ -318,7 +322,7 @@ static int gate_run(const struct gate_core *c, const struct gate_opts *o)
 		for (int pi = 0; pi < o->presses; pi++)
 		{
 			if (f >= o->press[pi].first && f < o->press[pi].first + o->press[pi].count
-				&& o->press[pi].index >= 0 && o->press[pi].index < GATE_BTN_COUNT)
+				&& o->press[pi].index >= 0 && o->press[pi].index < GATE_WIRE_COUNT)
 			{
 				buttons[o->press[pi].index] = 1;
 			}
@@ -355,7 +359,7 @@ static int gate_run(const struct gate_core *c, const struct gate_opts *o)
 		if (c->pre_frame)
 			c->pre_frame();
 
-		for (int i = 0; i < GATE_BTN_COUNT; i++)
+		for (int i = 0; i < GATE_WIRE_COUNT; i++)
 		{
 			if (buttons[i] != prev[i])
 				c->set_button(i, buttons[i]);

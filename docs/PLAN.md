@@ -1094,6 +1094,32 @@ own order. Nothing else in the 32 MiB differs at that frame.
 where they were wrong. No title with a dynaPatch was run; that road is
 upstream's own call from the recompiler and is only known to link.
 
+## A game on several discs (2026-10-15, chimera#286)
+
+The owner decided that a PCSX2 project takes several discs, with the
+controls the other cores with discs have (user-decided, 2026-10-15). The
+Disc slot takes up to eight files; the first is started. After the eight
+slots' controls come three of the console's own: Previous Disc and Next
+Disc move a selector over the project's discs and touch nothing, and Disc
+Swap is the tray, open while held and closing on the selected disc, or on
+the next one when the selector was not moved (DuckStation's design, its
+`machine-console.inc`). Their keys out of the box are [, ] and \.
+
+Open, the driver asks PCSX2 for no disc; released, for the selected one,
+both through PCSX2's own Change Disc (`VMManager::ChangeDisc`), which also
+reads the new disc's serial and so its settings and patches. That change
+keeps the tray reporting open for a second and then detects the disc for
+three, as a console's drive takes its time. A file that is no disc leaves
+the drive empty and says so. The selector and the tray live in the core's
+memory, so a state carries them. An arcade board has none of this.
+
+Measured on Street Fighter EX3 with Marvel vs. Capcom 2 as the second
+disc: the tray open from frame 300 to 360 gives another machine at frame
+1200 than no change, the same natively, in the sandbox and with a state
+around every frame; a second file that is no disc gives a third. At frame
+600 the second disc had not been read yet, so the test runs 1200. No game
+on two discs was played.
+
 ## What is known to be wrong, and is next
 
 - **Only one disc format is tested**: a raw 2352-byte-sector CD. CHD and CSO

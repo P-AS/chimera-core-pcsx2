@@ -1104,6 +1104,56 @@ else
 	fi
 fi
 
+# ---- a game on several discs (chimera issue #286) --------------------------
+# The Disc slot takes up to eight discs. After the slots' wire (188) come the
+# console's own controls: 188 Previous Disc, 189 Next Disc, 190 Disc Swap -
+# the tray, open while held and closing on the selected disc, or on the next
+# one when the selector was not moved. The tray opened at frame 300 and
+# closed at 360 on the second disc must change the run, the same natively
+# and in the sandbox, and a state saved and loaded around every frame must
+# change nothing. The second disc is PCSX2_SECOND_DISC, or the first under
+# another name (a project names two files). A second "disc" that is no disc
+# at all must leave the tray empty, which is another run again: the file the
+# selector names is the one opened. 1200 frames, because PCSX2's own change
+# of disc keeps the tray reporting open for a second and then spends three
+# detecting the disc: at frame 600 nothing had read the second one yet.
+if [ -z "$disc" ] || [ -z "$bios" ]; then
+	report "discs:swap" SKIP "needs a disc and a bios: would prove the tray and the selector reach the drive"
+else
+	second="${PCSX2_SECOND_DISC:-$disc}"
+	ds="$work/discs"
+	mkdir -p "$ds"
+	cp "$bios" "$ds/bios.bin"
+	ln -s "$disc" "$ds/first.${disc##*.}" 2>/dev/null || cp "$disc" "$ds/first.${disc##*.}"
+	ln -s "$second" "$ds/second.${second##*.}" 2>/dev/null || cp "$second" "$ds/second.${second##*.}"
+	printf '{"disc":["first.%s","second.%s"]}' "${disc##*.}" "${second##*.}" > "$ds/slots"
+	printf '{"fast_boot":true}' > "$ds/settings"
+	swap="--press 300:60:190"
+	none="$("$nat/run-native" "$ds" --frames 1200 2>/dev/null | digests)"
+	nswap="$("$nat/run-native" "$ds" --frames 1200 $swap 2>/dev/null | digests)"
+	bswap="$("$nat/run-wbx" "$gst/core.wbx" "$ds" --frames 1200 $swap 2>/dev/null | digests)"
+	rswap="$("$nat/run-wbx" "$gst/core.wbx" "$ds" --frames 1200 $swap --rerecord 2>/dev/null | digests)"
+	dn="$work/discs-none"
+	mkdir -p "$dn"
+	cp "$ds/bios.bin" "$ds/slots" "$ds/settings" "$dn/"
+	ln -s "$disc" "$dn/first.${disc##*.}" 2>/dev/null || cp "$disc" "$dn/first.${disc##*.}"
+	printf 'not a disc' > "$dn/second.${second##*.}"
+	bbad="$("$nat/run-wbx" "$gst/core.wbx" "$dn" --frames 1200 $swap 2>/dev/null | digests)"
+	if [ -z "$none" ] || [ -z "$nswap" ]; then
+		report "discs:swap" FAIL "a run produced no digests"
+	elif [ "$none" = "$nswap" ]; then
+		report "discs:swap" FAIL "the tray opened and closed and the machine did not notice"
+	elif [ "$nswap" != "$bswap" ]; then
+		report "discs:swap" FAIL "native and sandbox differ with a disc change"
+	elif [ "$bswap" != "$rswap" ]; then
+		report "discs:swap" FAIL "a state around every frame changed a run with a disc change"
+	elif [ -z "$bbad" ] || [ "$bbad" = "$bswap" ]; then
+		report "discs:swap" FAIL "closing on a file that is no disc was the same as closing on the disc"
+	else
+		report "discs:swap" PASS "Disc Swap held for 60 frames, closing on $(basename "$second"), changes the run, native == sandbox == a state around every frame; a second disc that is no disc leaves the tray empty"
+	fi
+fi
+
 # ---- texture filtering and FXAA: the picture, and only the picture ---------
 # textureFiltering and fxaa (chimera issue #122), internalResolution (#170)
 # and dithering (#283, its 'off' and 'force32'; 'scaled' only differs from
