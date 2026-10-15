@@ -982,6 +982,17 @@ static void ApplySettings(SettingsInterface& si, bool verbose)
 		si.SetFloatValue("EmuCore/GS", "upscale_multiplier",
 			gsRenderer != GSRendererType::SW ? static_cast<float>(scale) : 1.0f);
 	}
+	/* Dithering (chimera#283): PCSX2's own choice for how the hardware
+	 * renderers draw a picture the GS dithers - 0 off, 1 scaled, 2 unscaled
+	 * (PCSX2's default), 3 every 16-bit draw as 32-bit. The software
+	 * rasteriser dithers as the GS does and never reads it. A sync setting
+	 * for textureFiltering's reason: it decides what lands in a render
+	 * target, and a game that reads its picture back reads that. */
+	{
+		static const char* const kDither[] = { "unscaled", "scaled", "off", "force32" };
+		static const int kDitherModes[] = { 2, 1, 0, 3 };
+		si.SetIntValue("EmuCore/GS", "dithering_ps2", kDitherModes[SettingIndex("dithering", kDither, 4, 0)]);
+	}
 	si.SetBoolValue("EmuCore/GS", "VsyncEnable", false);
 	si.SetBoolValue("EmuCore/GS", "OsdShowMessages", false);
 	si.SetBoolValue("EmuCore/GS", "OsdShowSpeed", false);

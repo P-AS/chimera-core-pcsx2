@@ -158,6 +158,17 @@ pad driver - and the count stops growing the moment it has.
 
 ## Log
 
+- **2026-10-15** Dithering (chimera issue #283): `dithering` sets PCSX2's own
+  `dithering_ps2` under the OpenGL and Vulkan renderers - `unscaled` (2,
+  PCSX2's default), `scaled` (1), `off` (0), `force32` (3); the software
+  rasteriser dithers as the GS does and never reads it. A sync setting for
+  Texture Filtering's reason. Measured on Street Fighter EX3, 1500 frames on
+  llvmpipe: the default, `off` and `force32` draw three different pictures
+  over the run, and the memory domains, the sound and the lag count are byte
+  for byte the same in all three. The gpu:picture leg now has `off` and
+  `force32` beside nearest, fxaa and 2x (one machine, six pictures); with the
+  assignment taken out, `off` drew the default's picture. `scaled` differs
+  from the default only above 1x and is not in the leg.
 - **2026-10-09** The frames after a load are the pictures they were (chimera
   issue 190; `waterbox/gs-shadow.cpp`, patch 0026). Measured on a GTX 1060,
   Street Fighter EX3's 3D intro at frame 3600: the first frame after a load

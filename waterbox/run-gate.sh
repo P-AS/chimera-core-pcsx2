@@ -1105,7 +1105,9 @@ else
 fi
 
 # ---- texture filtering and FXAA: the picture, and only the picture ---------
-# textureFiltering and fxaa (chimera issue #122) are declared as settings that
+# textureFiltering and fxaa (chimera issue #122), internalResolution (#170)
+# and dithering (#283, its 'off' and 'force32'; 'scaled' only differs from
+# the default above 1x) are declared as settings that
 # change what PCSX2's OpenGL renderer draws and nothing whatever else in the
 # frames a disc here runs. This is where the claim is made good: the same disc,
 # the same frames, on the GPU bridge, at the default and at the other value -
@@ -1124,7 +1126,7 @@ fi
 # no disc here did in the frames run, and the declaration says so.
 gfxdisc="${PCSX2_GFX_DISC:-}"
 if [ -z "$gfxdisc" ] || [ ! -f "$gfxdisc" ]; then
-	report "gpu:picture" SKIP "set PCSX2_GFX_DISC to a disc: would prove textureFiltering, fxaa and internalResolution change the picture and nothing else"
+	report "gpu:picture" SKIP "set PCSX2_GFX_DISC to a disc: would prove textureFiltering, fxaa, internalResolution and dithering change the picture and nothing else"
 elif [ -z "$bios" ]; then
 	report "gpu:picture" SKIP "needs a bios as well as PCSX2_GFX_DISC"
 else
@@ -1153,7 +1155,8 @@ else
 	else
 		gpBad=""
 		for v in 'nearest {"renderer":"opengl-hw","textureFiltering":"nearest"}' 'fxaa {"renderer":"opengl-hw","fxaa":true}' \
-			'upscale {"renderer":"opengl-hw","internalResolution":"2x"}'; do
+			'upscale {"renderer":"opengl-hw","internalResolution":"2x"}' \
+			'dithoff {"renderer":"opengl-hw","dithering":"off"}' 'force32 {"renderer":"opengl-hw","dithering":"force32"}'; do
 			name="${v%% *}"
 			hash="$(gpRun "$name" "${v#* }")"
 			cmp -s "$work/gp.base.machine" "$work/gp.$name.machine" \
@@ -1162,7 +1165,7 @@ else
 				|| gpBad="$gpBad $name drew the same picture as the default over $gfxFrames frames;"
 		done
 		if [ -z "$gpBad" ]; then
-			report "gpu:picture" PASS "$gfxFrames frames of $(basename "$gfxdisc"): one machine, four pictures (default, nearest, fxaa, 2x internal resolution)"
+			report "gpu:picture" PASS "$gfxFrames frames of $(basename "$gfxdisc"): one machine, six pictures (default, nearest, fxaa, 2x internal resolution, dithering off, dithering force32)"
 		else
 			report "gpu:picture" FAIL "$(printf '%s' "$gpBad" | head -c 200)"
 		fi
