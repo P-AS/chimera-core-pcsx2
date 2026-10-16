@@ -1120,6 +1120,26 @@ around every frame; a second file that is no disc gives a third. At frame
 600 the second disc had not been read yet, so the test runs 1200. No game
 on two discs was played.
 
+## A board's S/PDIF output is heard (2026-10-16, chimera#226)
+
+Time Crisis 4 on a Super System 256 had its music and none of its effects
+or the commander's voice. The reporter's video of the standalone PCSX2x6
+fork has them. The game sends them through core 0's input to the sound
+chip's S/PDIF transmitter, which on the cabinet feeds an EXSOUND board,
+and upstream PCSX2 silences core 0's output while the chip is in S/PDIF
+mode (on a console that output may be a compressed bitstream nothing here
+decodes). The fork mixes the transmitter's input into core 0's output
+instead (pcsx2x6 c45a96b, "SPDIF output path for TC4 EXSOUND board"):
+read at twice the ADMA rate as packed 32-bit words, low half left and high
+half right, without the input volume, with the master volume. Patch 0029
+does the same on an arcade board only (`chimera_arcade_present`); a
+console keeps upstream's silence.
+
+Measured: Super Dragon Ball Z on a System 256, 3600 frames, is the same run
+before and after (every digest, audio included), so a board game that does
+not use S/PDIF is not touched. Not tried: Time Crisis 4 itself, which is
+not on the test machine; the reporter was asked to listen.
+
 ## What is known to be wrong, and is next
 
 - **Only one disc format is tested**: a raw 2352-byte-sector CD. CHD and CSO

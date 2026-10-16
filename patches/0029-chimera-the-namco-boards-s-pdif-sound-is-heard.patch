@@ -1,0 +1,74 @@
+diff --git a/pcsx2/SPU2/Mixer.cpp b/pcsx2/SPU2/Mixer.cpp
+--- a/pcsx2/SPU2/Mixer.cpp
++++ b/pcsx2/SPU2/Mixer.cpp
+@@ -2,6 +2,9 @@
+ // SPDX-License-Identifier: GPL-3.0+
+ 
+ #include "Host/AudioStream.h"
++#ifdef CHIMERA_ARCADE
++#include "chimera-arcade.h"
++#endif
+ #include "SPU2/Debug.h"
+ #include "SPU2/defs.h"
+ #include "SPU2/spu2.h"
+@@ -522,13 +525,43 @@ static __forceinline StereoOut32 MixCore(const uint coreidx, const VoiceMixSet&
+ void spu2Mix()
+ {
+ 	// Note: Playmode 4 is SPDIF, which overrides other inputs.
++#ifdef CHIMERA_ARCADE
++	// chimera (chimera#226): on a NAMCO board, S/PDIF is not a bitstream for
++	// an amplifier but sound the game wants heard. Time Crisis 4 sends its
++	// effects and voices through core 0's input to the S/PDIF transmitter,
++	// which feeds the cabinet's EXSOUND board; upstream silences core 0 in
++	// that mode, and the game had only its music. The transmitter takes the
++	// input at twice the ADMA rate, as packed 32-bit words: the low half is
++	// left, the high half right. It is added to core 0's output as it is,
++	// without the input volume or the core's mixing switches, as a digital
++	// output would be; the master volume still applies. From
++	// PS2Homebrew-arcade's pcsx2x6 (c45a96b, "SPDIF output path for TC4
++	// EXSOUND board"). A console keeps upstream's behaviour: there S/PDIF may
++	// carry a compressed bitstream, which played as samples would be noise.
++	const bool spdif_heard = chimera_arcade_present && (PlayMode & 4);
++	StereoOut32 RawInput0;
++	if (spdif_heard)
++	{
++		const StereoOut32 hifi = Cores[0].ReadInput_HiFi();
++		RawInput0.Left = (s16)(hifi.Left & 0xFFFF);
++		RawInput0.Right = (s16)(hifi.Left >> 16);
++	}
++	else
++	{
++		RawInput0 = Cores[0].ReadInput();
++	}
++#endif
+ 	StereoOut32 InputData[2] =
+ 		{
+ 			// SPDIF is on Core 0:
+ 			// Fixme:
+ 			// 1. We do not have an AC3 decoder for the bitstream.
+ 			// 2. Games usually provide a normal ADMA stream as well and want to see it getting read!
++#ifdef CHIMERA_ARCADE
++			/*(PlayMode&4) ? StereoOut32::Empty : */ ApplyVolume(RawInput0, Cores[0].InpVol),
++#else
+ 			/*(PlayMode&4) ? StereoOut32::Empty : */ ApplyVolume(Cores[0].ReadInput(), Cores[0].InpVol),
++#endif
+ 
+ 			// CDDA is on Core 1:
+ 			(PlayMode & 8) ? StereoOut32::Empty : ApplyVolume(Cores[1].ReadInput(), Cores[1].InpVol)};
+@@ -546,7 +579,16 @@ void spu2Mix()
+ 
+ 	StereoOut32 Ext(MixCore(0, VoiceData[0], InputData[0], StereoOut32::Empty));
+ 
++#ifdef CHIMERA_ARCADE
++	if (spdif_heard)
++	{
++		Ext.Left += RawInput0.Left;
++		Ext.Right += RawInput0.Right;
++	}
++	if ((!spdif_heard && (PlayMode & 4)) || (Cores[0].Mute != 0))
++#else
+ 	if ((PlayMode & 4) || (Cores[0].Mute != 0))
++#endif
+ 		Ext = StereoOut32::Empty;
+ 	else
+ 	{
