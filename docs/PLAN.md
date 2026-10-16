@@ -1259,3 +1259,16 @@ so those controls shipped unbound on the keyboard. Checked on Xvfb: with 1,
 Return, left Shift and Up held, Chimera reports Number1, Enter, Shift and Up.
 Left and right names stay beside the merged one, for a setup with the merging
 off.
+
+## 2026-10-16: the Boot ROM choices are shown by their names (chimera#293)
+
+The Boot ROM setting's values are BIOS file names such as
+`ps2-0230a-20080220`, and nothing said that the `a` means USA. Both Boot ROM
+settings (the console's and the arcade boards') now carry `optionLabels`, a
+package field Chimera added in chimera 1e723d6: each value is shown as the
+label of the firmware entry it calls for, "USA v2.30 (2008-02-20)". Only the
+words change; projects and movies keep the value, and an older Chimera
+ignores the field. The labels were generated from the firmware entries, so
+every one of the 73 console values and 4 arcade values has one. In the same
+Chimera change, the wizard lists first the Boot ROMs whose file is on hand,
+marked "(found)".
