@@ -23,6 +23,10 @@ PCSX2's patch collection is compiled in too: each patch it has for a game
 project, "Use Custom Patch: Enable ...", off unless turned on. A widescreen
 patch also makes Chimera show the picture at 16:9. Cheats are not applied.
 
+It is built for x86-64 and for aarch64 (on the aarch64 forks of Chimera and
+miniBox), one package per CPU. PCSX2 has no recompilers for arm64, so the
+aarch64 package has its interpreters alone.
+
 ## Using it in Chimera
 
 Chimera ships no cores and downloads nothing. Download the `.chimeraCore`
