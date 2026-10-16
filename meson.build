@@ -230,10 +230,13 @@ if guest_gl
   # "-Dthread_local=": glslang keeps its allocator per thread. The guest has
   # one thread that compiles shaders and keeps no thread-local storage of its
   # own making, so the two variables are ordinary ones.
+  # "-include cstdint": this glslang names uint32_t in SPIRV/SpvBuilder.h
+  # without including <cstdint>, and from GCC 15 libstdc++'s other headers no
+  # longer bring it in.
   # (waterbox/generated is where the header every file here is given first lives)
   vk_libs += static_library('glslang', glslang_sources,
     include_directories: [inc_glslang, include_directories('waterbox/generated')],
-    cpp_args: ['-DENABLE_OPT=0', '-Dthread_local=', '-w'])
+    cpp_args: ['-DENABLE_OPT=0', '-Dthread_local=', '-include', 'cstdint', '-w'])
   vk_bridge = custom_target('vk-bridge',
     output: ['vk-bridge-guest.c', 'vk-bridge-ops.h', 'vk-bridge-host.inc'],
     # made again when miniBox's generator or its list changes: without this
