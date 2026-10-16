@@ -1137,8 +1137,15 @@ console keeps upstream's silence.
 
 Measured: Super Dragon Ball Z on a System 256, 3600 frames, is the same run
 before and after (every digest, audio included), so a board game that does
-not use S/PDIF is not touched. Not tried: Time Crisis 4 itself, which is
-not on the test machine; the reporter was asked to listen.
+not use S/PDIF is not touched. Time Crisis 4 (the reporter's hard disk
+image and dongle, by SHA-1), with two coins at frames 1000 and 1100, Start
+at 1300 and 1700, and the trigger pulled every 200 frames from 10000:
+the chip is in S/PDIF mode for 114 of the run's 260 seconds, and what the
+transmitter takes is a voice with its harmonics and the sharp bursts of
+gunshots, band-limited at 24 kHz - sound, not a bitstream, which would be
+noise across the whole band. With the path switched off (a local build)
+the run's sound is another and has none of it. Not listened to by a
+person.
 
 ## What is known to be wrong, and is next
 
