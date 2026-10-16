@@ -330,6 +330,42 @@ else
 	report "nobios:refuses" PASS "both flavors refuse, and say why"
 fi
 
+# ---- the cpu cores a package has -------------------------------------------
+# cpu_core picks the recompilers or the interpreters, and they are different
+# machines. The x86-64 package has both. The aarch64 one has the interpreters
+# alone - upstream has no arm64 recompilers, and that build generates no code
+# (meson.build) - so a project asking it for the recompilers must be refused,
+# in both flavors, rather than quietly run the other machine under a movie
+# that cites this one. Needs no content: the refusal comes before the bios.
+# On x86-64 the same project gets past it to the bios refusal.
+rec_dir="$work/recompiler"
+mkdir -p "$rec_dir"
+printf '{"cpu_core":"recompiler"}' > "$rec_dir/settings"
+rec_nat="$("$nat/run-native" "$rec_dir" --frames 1 2>&1)"
+rec_nat_rc=$?
+rec_box="$("$nat/run-wbx" "$gst/core.wbx" "$rec_dir" --frames 1 2>&1)"
+rec_box_rc=$?
+case "$(uname -m)" in
+	aarch64)
+		if [ "$rec_nat_rc" -eq 0 ] || [ "$rec_box_rc" -eq 0 ]; then
+			report "cpu:cores" FAIL "a build without recompilers started a machine that asked for them"
+		elif ! grep -q "has none" <<< "$rec_nat" || ! grep -q "has none" <<< "$rec_box"; then
+			report "cpu:cores" FAIL "asked for the recompilers, the refusal does not say this package has none"
+		else
+			report "cpu:cores" PASS "no recompilers on aarch64: both flavors refuse a project that asks for them"
+		fi ;;
+	x86_64)
+		if grep -q "has none" <<< "$rec_nat$rec_box"; then
+			report "cpu:cores" FAIL "the x86-64 build refused its own recompilers"
+		elif ! grep -qi "bios" <<< "$rec_nat" || ! grep -qi "bios" <<< "$rec_box"; then
+			report "cpu:cores" FAIL "asked for the recompilers, a flavor did not reach the bios refusal"
+		else
+			report "cpu:cores" PASS "the recompilers are there: both flavors reach the bios refusal"
+		fi ;;
+	*)
+		report "cpu:cores" FAIL "miniBox runs on x86-64 and aarch64 only, not $(uname -m)" ;;
+esac
+
 # ---- the per-title database ------------------------------------------------
 # PCSX2 keeps what it knows about individual games in GameIndex.yaml - clamp
 # modes, round modes, game fixes, GS hardware fixes - and upstream OPENS that
@@ -547,7 +583,9 @@ fi
 
 # The OTHER cpu core: every leg above ran the recompilers (the default), so
 # the interpreters get their own pair - a different machine the movie can
-# cite, held equal across flavors and lossless under rerecord.
+# cite, held equal across flavors and lossless under rerecord. (On aarch64 the
+# interpreters are the default and the only cores, so this pair runs them
+# again.)
 wi="$work/bios-int"
 mkdir -p "$wi"
 cp "$bios" "$wi/bios.bin"

@@ -21,6 +21,10 @@ included: a game gets the corrections PCSX2 gives it, and a package pins them.
 Cheats and the patches a person chooses (widescreen, no-interlacing) are not
 applied.
 
+It is built for x86-64 and for aarch64 (on the aarch64 forks of Chimera and
+miniBox), one package per CPU. PCSX2 has no recompilers for arm64, so the
+aarch64 package has its interpreters alone.
+
 ## Using it in Chimera
 
 Chimera ships no cores and downloads nothing. Download the `.chimeraCore`
