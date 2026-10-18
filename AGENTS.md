@@ -3,7 +3,8 @@
 This repository builds PCSX2 (PlayStation 2, and the NAMCO System 246, 256
 and Super 256 arcade boards) as a sandboxed guest for Chimera, a frontend for
 tool-assisted speedruns. It produces one file, `pcsx2.chimeraCore`, which
-Chimera loads from its `Cores` folder. The same sources are also built
+Chimera loads from its `Cores` folder (a release names it
+`pcsx2-<version>-<x64|arm64>.chimeraCore`; most users want the x64 one). The same sources are also built
 natively as a reference, and the gate holds the two byte-identical.
 `.github/workflows/chimera.yml` is the authoritative build recipe;
 `docs/BUILDING.md` explains it step by step.

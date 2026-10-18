@@ -313,7 +313,10 @@ is a file a person puts in Chimera's `Cores` folder.
   File > Core Manager.
 - **Without building.** Download the package from this repository's Releases
   page, https://github.com/ToolAssisted-run/chimera-core-pcsx2/releases, and
-  put it in the same folder. CI publishes a rolling `dev` release on every
+  put it in the same folder. A release has `pcsx2-<version>-x64.chimeraCore`
+  and `pcsx2-<version>-arm64.chimeraCore`: you most likely want the x64 one;
+  take the arm64 one only if you know you are using an arm64 device. Put only
+  one of them in the folder. CI publishes a rolling `dev` release on every
   green push to `main` and a dated `nightly-YYYY-MM-DD` release from the
   scheduled run, when `main` moved since the last one.
 
@@ -321,7 +324,9 @@ File > Core Manager lists what is in the folder; Refresh List rescans it.
 
 A package's version is the commit it was built from. A hand-built package
 carries `+local` and is for testing; Chimera's publishing script refuses to
-publish one. A published package is named `pcsx2-<version>.chimeraCore` and
+publish one. A published package is named
+`pcsx2-<version>-<x64|arm64>.chimeraCore` (before packages carried their CPU,
+`pcsx2-<version>.chimeraCore`, which is x64) and
 the one built here `pcsx2.chimeraCore`; Chimera identifies a package by its
 content, not by its file name.
 
