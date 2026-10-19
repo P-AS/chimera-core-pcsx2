@@ -26,6 +26,13 @@
  *   applies the patch only when it is not there.
  * The pad state comes through libpad every frame, as a game reads it.
  *
+ * It also reads the console's clock once, at the start, through the BIOS's
+ * CDVD service (libcdvd's sceCdReadClock), as a game that shows the date or
+ * stamps its saves does. The clock lives in the drive's controller, which
+ * only the IOP reaches, so the answer passes through the IOP's memory: a
+ * project's clock setting then changes what the machine holds (the core's
+ * frontend test settings:clock depends on that). Nothing drawn depends on it.
+ *
  * The layout (640x448, NTSC; tests/own/chimera-padtest/cells.py reads it):
  * port p's cells start at y = 40 + 200 * p; button i (in the order of
  * kButtons below) is the 64x40 cell at x = 40 + 72 * (i % 8),
@@ -38,6 +45,7 @@
 #include <sifrpc.h>
 #include <sbv_patches.h>
 #include <libpad.h>
+#include <libcdvd.h>
 #include <gsKit.h>
 #include <dmaKit.h>
 
@@ -48,6 +56,8 @@ void _libcglue_deinit(void) { }
 DISABLE_PATCHED_FUNCTIONS();
 
 static char padArea[2][256] __attribute__((aligned(64)));
+/* the clock as the BIOS answered it (seconds to year, in BCD) */
+static sceCdCLOCK rtc;
 
 /* the button bit libpad reports (active low), in the cells' order */
 static const unsigned short kButtons[16] = {
@@ -87,6 +97,8 @@ static void load_drivers(void)
 	padInit(0);
 	padPortOpen(0, 0, padArea[0]);
 	padPortOpen(1, 0, padArea[1]);
+	sceCdInit(SCECdINoD);
+	sceCdReadClock(&rtc);
 }
 
 /* the buttons held on a port, a bit each (1 = held), or 0 */

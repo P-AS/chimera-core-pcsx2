@@ -431,7 +431,7 @@ it needs `waterbox/build-openps2bios.sh` run first, as the core gate does.
 | Check | What it holds |
 | --- | --- |
 | `disc:frontend` | a disc through Chimera: EE RAM equals the native reference |
-| `settings:clock` | a machine-shaping setting (the console's clock) reaches the guest through the frontend; SKIP when the disc does not read the clock |
+| `settings:clock` | a machine-shaping setting (the console's clock) reaches the guest through the frontend; SKIP when the disc does not read the clock in its first 200 frames (`chimera-padtest.iso` does; many games do not) |
 | `bios:default` | a project that names no Boot ROM gets the console's default and starts; SKIP unless the bios is that default's dump |
 | `keybinds` | the package's key bindings become the frontend's defaults |
 

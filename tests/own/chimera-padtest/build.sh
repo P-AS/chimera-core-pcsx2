@@ -32,7 +32,7 @@ H
 	mips64r5900el-ps2-elf-gcc -T"$PS2SDK/ee/startup/linkfile" -O2 -o build/chimera-padtest.elf \
 		build/main.o build/freesio2_irx.o build/freepad_irx.o \
 		-L"$PS2SDK/ee/lib" -L"$GSKIT/lib" -Wl,-zmax-page-size=128 \
-		-lgskit -ldmakit -lpad -lpatches -ldebug
+		-lgskit -ldmakit -lpad -lcdvd -lpatches -ldebug
 	mips64r5900el-ps2-elf-strip -s build/chimera-padtest.elf
 	exit 0
 fi

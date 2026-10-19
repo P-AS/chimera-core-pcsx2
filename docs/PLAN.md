@@ -1370,3 +1370,19 @@ The owner answered the two questions left open above.
   not read the clock in 200 frames either), with the Boot ROM now found by
   SHA-1. The core gate on the retail BIOS: 44 passed, 0 failed, 6 skipped,
   the same checks as before. The package's contract tests: 20 passed.
+
+## 2026-10-19: the test disc reads the clock, so settings:clock runs on it (user-decided)
+
+The owner asked for `settings:clock` to run on CI. It sets the console's
+clock to another year and needs the disc to read the clock, so that the
+answer lands in the IOP's memory; chimera-padtest did not, so the check said
+SKIP. The program now asks the BIOS for the clock once at the start, through
+ps2sdk's CDVD library (`sceCdInit`, then `sceCdReadClock`), which OpenPS2BIOS
+0.2 serves as a retail BIOS does. Nothing it draws changed. The new ELF and
+disc build byte for byte the same each time.
+
+Measured here: the frontend test on OpenPS2BIOS and the disc, 3 passed (with
+`settings:clock`, which said SKIP with the old disc) and 1 skipped
+(`bios:default`); on the retail BIOS and the disc, 4 passed. The core gate,
+the same checks as before: retail BIOS 44 passed, 0 failed, 6 skipped;
+OpenPS2BIOS 38 passed, 0 failed, 13 skipped.
