@@ -23,6 +23,11 @@ The steps are the same on both. The aarch64 build differs in what it is:
   available there.
 - It is built with `-ffixed-x18`, so the package is not tied to Linux, and
   `waterbox/check-portable.sh` holds every guest link to that (below).
+- Its thread pointer is miniBox's slot, not TPIDR_EL0 (where macOS keeps the
+  CPU number): the link makes `core-linked.wbx`, and miniBox's
+  `wbx-tp-rewrite.py` finishes it as `core.wbx`, every read of the register
+  the compiler emitted now a read of the slot. miniBox's host refuses an
+  aarch64 `core.wbx` that still reads the register.
 - Pages are 4 KiB, as on x86-64, whatever the host's are (Asahi's 16 KiB):
   `OVERRIDE_HOST_PAGE_SIZE=0x1000`, for both flavors.
 

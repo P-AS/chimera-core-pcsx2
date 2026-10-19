@@ -356,7 +356,18 @@ if meson.is_cross_build()
       '-Wl,-u,pthread_mutexattr_destroy']
   endif
 
-  core_wbx = executable('core', core_sources + driver_sources + gl_sources,
+  # Linked as core-linked.wbx, and finished as core.wbx by miniBox's
+  # wbx-tp-rewrite.py: miniBox's aarch64 machine keeps the guest's thread
+  # pointer in a word of memory, not TPIDR_EL0 (where macOS writes the CPU
+  # number at every context switch; its MACHINE-SPEC, "aarch64"), and the
+  # script turns every read of the register the compiler emitted for a thread
+  # local into a read of that word. Its host refuses an aarch64 image that
+  # still reads the register. On x86-64 the script copies the image as it is.
+  tp_rewrite = mbdir / 'source/guest/wbx-tp-rewrite.py'
+  if not import('fs').exists(tp_rewrite)
+    error('miniBox at ' + mbdir + ' predates the aarch64 thread-pointer slot (no source/guest/wbx-tp-rewrite.py): update it')
+  endif
+  core_linked = executable('core-linked', core_sources + driver_sources + gl_sources,
     name_suffix: 'wbx',
     include_directories: [inc, inc_glslang],
     link_with: [deps_lib] + vk_libs,
@@ -370,6 +381,11 @@ if meson.is_cross_build()
       mbuild / 'source/guest/cxxglue.c.o',
       mbuild / 'source/guest/emulibc.c.o',
       '-L' + sr / 'lib', '-lstdc++', '-lgcc', '-lgcc_eh', '-lc'])
+  core_wbx = custom_target('core.wbx',
+    input: core_linked,
+    output: 'core.wbx',
+    command: [find_program('python3'), tp_rewrite, '@INPUT@', '@OUTPUT@'],
+    build_by_default: true)
 
   # On every link: is this core machine code for its CPU and not for one OS?
   # On aarch64 that means x18 left alone (-ffixed-x18 in setup-guest.sh and

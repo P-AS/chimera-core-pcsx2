@@ -26,8 +26,11 @@ natively as a reference, and the gate holds the two byte-identical.
   aarch64, everything built here must leave register x18 alone (`-ffixed-x18`
   in `setup-guest.sh` and `setup-mesa.sh`): Windows keeps the TEB there and
   macOS clears it, so code using it ties the package to Linux. It also lists
-  what the guest kit (musl, libstdc++, libgcc) still does with x18, without
-  failing on it. On x86-64 it has nothing to check.
+  what the guest kit (now libgcc only) still does with x18, without failing
+  on it. The linked image must not reach TPIDR_EL0 at all: miniBox keeps an
+  aarch64 guest's thread pointer in memory, and the link is finished by its
+  `wbx-tp-rewrite.py` (`core-linked.wbx` -> `core.wbx`), which points the
+  compiler's reads at it. On x86-64 it has nothing to check.
 - `waterbox/waterbox.config`, `file_slots.json`, `default_keybinds.json`, `package-licenses.json` - what the package declares to Chimera.
 - `waterbox/tests/` - the frontend gate (`run-frontend.sh`) and its helpers.
 - `tests/own/` - redistributable test content (tracked). `tests/roms/` - your own bios and discs, ignored wholesale.
