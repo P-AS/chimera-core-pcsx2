@@ -300,11 +300,11 @@ content, not by its file name.
 
 ## Run the gates
 
-A PlayStation 2 has no HLE bios: nothing executes without a real one, and a
-bios is somebody's dump. So both gates are bounded by content. With nothing
-provided they prove very little, and they say so with SKIP lines. A green CI
-run means the core builds, starts and refuses clearly; it does not mean the
-machine was tested.
+A PlayStation 2 has no HLE bios: nothing executes without one, and a retail
+bios is somebody's dump. Where none is given, the core gate runs its bios
+tier on OpenPS2BIOS, an open replacement (below), with this repository's own
+test program; what that cannot test says SKIP. A game's disc is always the
+developer's own content, and its checks SKIP without it.
 
 ### The core gate
 
@@ -317,7 +317,7 @@ Options: `-n <native build dir>` (default `build/meson-native`) and
 `run-wbx` and `core.wbx`. It prints one line per check and ends with
 `N ok, N failed, N skipped`; it fails when any check failed.
 
-**With nothing provided** (what CI runs), five checks run:
+**With no bios at all**, five checks run:
 
 | Check | What it holds |
 | --- | --- |
@@ -329,15 +329,31 @@ Options: `-n <native build dir>` (default `build/meson-native`) and
 
 Every other check reports SKIP and says what it would have proven.
 
+**OpenPS2BIOS** ([TamaribaEmu/OpenPS2BIOS](https://github.com/TamaribaEmu/OpenPS2BIOS),
+MIT, no Sony code) is the submodule `extern/openps2bios`, pinned at its v0.2
+release. `waterbox/build-openps2bios.sh` builds it into
+`build/openps2bios/OpenPS2BIOS.bin` with LLVM 23 (apt.llvm.org's `clang-23`,
+`lld-23`, `llvm-23`; `LLVM_BIN` names another bin folder) and checks the
+result against the SHA-256 upstream published for the release - another
+LLVM compiles it into other bytes. The gate uses it when no retail bios is
+found (what CI runs), or when `$CHIMERA_PS2_BIOS` names it. It is for the
+tests only, and not in the package. On it, the checks it cannot pass report
+SKIP with the reason (the list is `retail_only` in the gate): the pad read
+from the bios's own boot screen (`input:*`), a memory card read back, the
+interlaced picture, an executable booted with no disc, disc swap. Measured
+on 0.2: with a retail bios 44 checks pass and 6 skip; on OpenPS2BIOS 38 pass,
+the 7 listed skip, and so do the same 6.
+
 **With a bios** - the first `*.bin` in `tests/roms/bios/`, or the file
-`$CHIMERA_PS2_BIOS` names - the machine itself is gated: native == sandbox on
+`$CHIMERA_PS2_BIOS` names, else OpenPS2BIOS - the machine itself is gated: native == sandbox on
 video, audio, lag and memory-domain digests (`bios:equivalence`), the
 interpreters (`cpu:interpreter`, `cpu:interpreter-rerecord`), turbo, the
 deinterlacer, a savestate round-trip around every frame (`bios:savestate`),
 native determinism, the memory domains, the picture, input and lag, and the
-save-data channel. With `tests/own/padtest.elf` (committed, free to
-distribute) it also runs `pad:*` and `gun:bus`, `gun:controls`,
-`gun:equivalence`.
+save-data channel. With `tests/own/chimera-padtest.iso`, this repository's
+own test program on its own disc (source, build and licence in
+`tests/own/chimera-padtest/`), it also runs `pad:*`, `gun:bus`,
+`gun:controls`, `gun:equivalence` and the renderer checks.
 
 **More content, more checks:**
 

@@ -13,3 +13,6 @@
 [submodule "extern/glslang"]
 	path = extern/glslang
 	url = https://github.com/KhronosGroup/glslang.git
+[submodule "extern/openps2bios"]
+	path = extern/openps2bios
+	url = https://github.com/TamaribaEmu/OpenPS2BIOS.git

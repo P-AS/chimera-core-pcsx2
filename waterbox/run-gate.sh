@@ -18,7 +18,12 @@
 #
 # The second tier needs a bios (tests/roms/bios/*.bin, or $CHIMERA_PS2_BIOS),
 # and a third needs a disc (tests/roms/*.bin) on top of that. Both are the
-# user's own content and neither is in this repository. When they are absent
+# user's own content and neither is in this repository. Where no retail bios
+# is given, the second tier runs on OpenPS2BIOS, an open replacement built
+# from extern/openps2bios (waterbox/build-openps2bios.sh): most of it passes
+# there as on a retail bios, and the tests it cannot pass (its own boot
+# screen reading the pad, memory card reads, interlaced pictures, an
+# executable with no disc; the list is retail_only below) say SKIP. When they are absent
 # the checks report SKIP and say what they would have proven, so that a green
 # run never quietly means "nothing was tested".
 #
@@ -78,7 +83,24 @@ bridge_answered() {
 ok=0
 failed=0
 skipped=0
+# With OpenPS2BIOS in place of a retail bios (see "what content there is"),
+# these tests cannot pass, and say SKIP with the reason; everything else runs
+# on it as on a retail bios (measured on 0.2 with tests/own/chimera-padtest:
+# the other 37 tests that run with a retail bios pass on it too).
+open_bios=0
+declare -A retail_only=(
+	[input:shaped]="does not read the pad (its pad module answers nothing)"
+	[input:lag]="does not read the pad, so no frame polls it"
+	[pad:elf]="starts discs only, not an executable"
+	[savedata:roundtrip]="does not read a memory card back"
+	[discs:swap]="does not notice the tray close on another file"
+	[video:deinterlace]="draws its own boot screen, which is not interlaced"
+	[video:steady]="draws its own boot screen, which is not interlaced"
+)
 report() {
+	if [ "$open_bios" = 1 ] && [ -n "${retail_only[$1]:-}" ]; then
+		set -- "$1" SKIP "needs a retail bios: OpenPS2BIOS ${retail_only[$1]}"
+	fi
 	printf "%-28s %-6s %s\n" "$1" "$2" "$3"
 	case "$2" in
 		PASS) ok=$((ok + 1)) ;;
@@ -408,6 +430,15 @@ fi
 bios="${CHIMERA_PS2_BIOS:-}"
 if [ -z "$bios" ]; then
 	bios="$(find "$root/tests/roms/bios" -maxdepth 1 -name '*.bin' 2>/dev/null | sort | head -1)"
+fi
+# no retail bios: OpenPS2BIOS, built from the submodule by
+# waterbox/build-openps2bios.sh (CHIMERA_PS2_BIOS may also name it)
+if [ -z "$bios" ] && [ -f "$root/build/openps2bios/OpenPS2BIOS.bin" ]; then
+	bios="$root/build/openps2bios/OpenPS2BIOS.bin"
+fi
+if [ -n "$bios" ] && [ "$(sha256sum < "$bios" | cut -c1-64)" = "$(cut -c1-64 "$root/tests/openps2bios/OpenPS2BIOS-0.2.sha256")" ]; then
+	open_bios=1
+	report "bios:open" PASS "no retail bios given: the tests that need one run on OpenPS2BIOS 0.2 (the released bytes), and those it cannot pass say SKIP"
 fi
 disc="$(find "$root/tests/roms" -maxdepth 1 \( -name '*.bin' -o -name '*.iso' \) 2>/dev/null | sort | head -1)"
 
@@ -843,79 +874,88 @@ else
 	report "savedata:multitap" PASS "eight cards behind two multitaps, and two without them"
 fi
 
+padelf="$root/tests/own/chimera-padtest.iso"
+
 # ---- the pad, as the machine sees it ----------------------------------------
-# tests/own/padtest.elf draws every button of a DualShock 2 with the pressure
-# the machine is reading. Hold the button a package DECLARES as "Circle" and the
-# circle cell must be the one that moves - nothing else can answer that, because
+# tests/own/chimera-padtest (this repository's own program, on its own disc)
+# draws a cell for every button of a DualShock 2, lit while the machine reads
+# it as held. Hold the button a package DECLARES as "Circle" and the Circle
+# cell must be the one that lights - nothing else can answer that, because
 # every layer between a frontend column and the pad is keyed by the same names
-# and a swap in one of them is invisible from either end.
+# and a swap in one of them is invisible from either end. It loads its own pad
+# drivers, so it reads the pad on OpenPS2BIOS as on a retail bios.
 #
-# It also exercises booting a PS2 EXECUTABLE, which is the other thing this file
-# is: no disc in the tray, the program handed to the machine directly.
-padelf="$root/tests/own/padtest.elf"
-if [ ! -f "$padelf" ]; then
-	report "pad:mapping" SKIP "tests/own/padtest.elf is missing"
-	report "pad:ports" SKIP "tests/own/padtest.elf is missing"
+# pad:elf asks the other thing a PS2 can be handed: an executable, with no
+# disc in the tray (OpenPS2BIOS starts discs only).
+padexe="$root/tests/own/chimera-padtest.elf"
+cells="$root/tests/own/chimera-padtest/cells.py"
+if [ ! -f "$padelf" ] || [ ! -f "$padexe" ]; then
+	report "pad:elf" SKIP "tests/own/chimera-padtest.iso or .elf is missing"
+	report "pad:mapping" SKIP "tests/own/chimera-padtest.iso is missing"
+	report "pad:ports" SKIP "tests/own/chimera-padtest.iso is missing"
 elif [ -z "$bios" ]; then
+	report "pad:elf" SKIP "needs a bios"
 	report "pad:mapping" SKIP "needs a bios"
 	report "pad:ports" SKIP "needs a bios"
 else
+	pe="$work/padexe"
+	mkdir -p "$pe"
+	cp "$bios" "$pe/bios.bin"
+	cp "$padexe" "$pe/chimera-padtest.elf"
+	printf '{"disc":["chimera-padtest.elf"]}' > "$pe/slots"
+	printf '{}' > "$pe/settings"
+	"$nat/run-native" "$pe" --frames 300 --press 200:100:8 --screenshot "$work/padexe.tga" >/dev/null 2>&1
+	if [ "$(python3 "$cells" "$work/padexe.tga" 2>/dev/null | tr '\n' ' ' | sed 's/ $//')" = "Circle" ]; then
+		report "pad:elf" PASS "chimera-padtest.elf, booted with no disc in the tray, reads Circle held"
+	else
+		report "pad:elf" FAIL "the machine did not run the executable (or it did not read Circle held)"
+	fi
+
 	pd="$work/pad"
 	mkdir -p "$pd"
 	cp "$bios" "$pd/bios.bin"
-	cp "$padelf" "$pd/padtest.elf"
-	printf '{"disc":["padtest.elf"]}' > "$pd/slots"
+	cp "$padelf" "$pd/chimera-padtest.iso"
+	printf '{"disc":["chimera-padtest.iso"]}' > "$pd/slots"
 	printf '{}' > "$pd/settings"
 
-	# The frames are all EVEN: an interlaced machine hands over half a picture
-	# per frame, so two frames an odd number apart differ everywhere.
-	if ! "$nat/run-native" "$pd" --frames 400 --screenshot "$work/pad.idle.tga" >/dev/null 2>&1 \
-		|| [ ! -s "$work/pad.idle.tga" ]; then
-		report "pad:elf" FAIL "the machine did not boot the executable"
+	names="Up Down Left Right Start Select Square Cross Circle Triangle L1 R1 L2 R2 L3 R3"
+	"$nat/run-native" "$pd" --frames 300 --screenshot "$work/pad.idle.tga" >/dev/null 2>&1
+	idle="$(python3 "$cells" "$work/pad.idle.tga" 2>/dev/null | tr '\n' ' ' | sed 's/ $//')"
+	wrong=""
+	[ -s "$work/pad.idle.tga" ] && [ -z "$idle" ] || wrong=" idle->[${idle:-no picture}]"
+	idx=0
+	for want in $names; do
+		# the press must still be HELD on the frame that is captured, which
+		# is the last one
+		"$nat/run-native" "$pd" --frames 300 --press 200:100:$idx \
+			--screenshot "$work/pad.$idx.tga" >/dev/null 2>&1
+		got="$(python3 "$cells" "$work/pad.$idx.tga" 2>/dev/null | tr '\n' ' ' | sed 's/ $//')"
+		[ "$got" = "$want" ] || wrong="$wrong $want->[${got:-nothing}]"
+		idx=$((idx + 1))
+	done
+	if [ -z "$wrong" ]; then
+		report "pad:mapping" PASS "all 16 buttons light their own cell, and no other; none is lit idle"
 	else
-		report "pad:elf" PASS "padtest.elf booted with no disc in the tray"
-
-		names="Up Down Left Right Start Select Square Cross Circle Triangle L1 R1 L2 R2 L3 R3"
-		wrong=""
-		idx=0
-		for want in $names; do
-			# the press must still be HELD on the frame that is captured, which
-			# is the last one - a released button reads as idle and every
-			# button would come back as "nothing"
-			"$nat/run-native" "$pd" --frames 500 --press 400:100:$idx \
-				--screenshot "$work/pad.$idx.tga" >/dev/null 2>&1
-			got="$(python3 "$here/tests/pad-cells.py" "$work/pad.idle.tga" "$work/pad.$idx.tga" | tr '\n' ' ' | sed 's/ $//')"
-			[ "$got" = "$want" ] || wrong="$wrong $want->[${got:-nothing}]"
-			idx=$((idx + 1))
-		done
-		if [ -z "$wrong" ]; then
-			report "pad:mapping" PASS "all 16 buttons light their own readout, and no other"
-		else
-			report "pad:mapping" FAIL "$wrong"
-		fi
-
-		# ---- the second port ------------------------------------------------
-		# padtest draws a block per port, so two pads and two DIFFERENT buttons
-		# held at once answer both halves of the question in one run: each
-		# port's input reached that port, and neither reached the other. A
-		# single run rather than sixteen because a PS2 interprets everything and
-		# five hundred frames is not cheap.
-		#
-		# P2's block starts at wire 43, not 17: the two physical ports carry the
-		# instruments' controls and the light gun's as well as the pad's.
-		printf '{"port1":"dualshock2","port2":"dualshock2"}' > "$pd/settings"
-		"$nat/run-native" "$pd" --frames 400 --screenshot "$work/pad2.idle.tga" >/dev/null 2>&1
-		"$nat/run-native" "$pd" --frames 500 --press 400:100:8 --press 400:100:50 \
-			--screenshot "$work/pad2.held.tga" >/dev/null 2>&1
-		p1="$(python3 "$here/tests/pad-cells.py" "$work/pad2.idle.tga" "$work/pad2.held.tga" 0 | tr '\n' ' ' | sed 's/ $//')"
-		p2="$(python3 "$here/tests/pad-cells.py" "$work/pad2.idle.tga" "$work/pad2.held.tga" 1 | tr '\n' ' ' | sed 's/ $//')"
-		if [ "$p1" = "Circle" ] && [ "$p2" = "Cross" ]; then
-			report "pad:ports" PASS "Circle on port 1 and Cross on port 2 reach their own pad and no other"
-		else
-			report "pad:ports" FAIL "port 1 shows [${p1:-nothing}] and port 2 shows [${p2:-nothing}], want Circle and Cross"
-		fi
-		printf '{}' > "$pd/settings"
+		report "pad:mapping" FAIL "$wrong"
 	fi
+
+	# ---- the second port ------------------------------------------------
+	# the program draws a block per port, so two pads and two DIFFERENT
+	# buttons held at once answer both halves of the question in one run:
+	# each port's input reached that port, and neither reached the other.
+	# P2's block starts at wire 43, not 17: the two physical ports carry the
+	# instruments' controls and the light gun's as well as the pad's.
+	printf '{"port1":"dualshock2","port2":"dualshock2"}' > "$pd/settings"
+	"$nat/run-native" "$pd" --frames 300 --press 200:100:8 --press 200:100:50 \
+		--screenshot "$work/pad2.held.tga" >/dev/null 2>&1
+	p1="$(python3 "$cells" "$work/pad2.held.tga" 0 2>/dev/null | tr '\n' ' ' | sed 's/ $//')"
+	p2="$(python3 "$cells" "$work/pad2.held.tga" 1 2>/dev/null | tr '\n' ' ' | sed 's/ $//')"
+	if [ "$p1" = "Circle" ] && [ "$p2" = "Cross" ]; then
+		report "pad:ports" PASS "Circle on port 1 and Cross on port 2 reach their own pad and no other"
+	else
+		report "pad:ports" FAIL "port 1 shows [${p1:-nothing}] and port 2 shows [${p2:-nothing}], want Circle and Cross"
+	fi
+	printf '{}' > "$pd/settings"
 fi
 
 # ---- the light gun ----------------------------------------------------------
@@ -933,19 +973,19 @@ fi
 #
 # What they do NOT prove is further down, as a SKIP: that the position and the
 # trigger reach a GAME. Nothing on a PS2 polls a USB device until a program
-# loads the USB driver and asks, and padtest.elf - the only program this
-# repository may ship - reads the controller bus and never looks at USB. That
+# loads the USB driver and asks, and chimera-padtest - this repository's own
+# program - reads the controller bus and never looks at USB. That
 # needs one of the dozen or so discs built for the gun.
 if [ -z "$bios" ] || [ ! -f "$padelf" ]; then
-	report "gun:bus" SKIP "needs a bios and padtest.elf"
-	report "gun:controls" SKIP "needs a bios and padtest.elf"
-	report "gun:equivalence" SKIP "needs a bios and padtest.elf"
+	report "gun:bus" SKIP "needs a bios and tests/own/chimera-padtest.iso"
+	report "gun:controls" SKIP "needs a bios and tests/own/chimera-padtest.iso"
+	report "gun:equivalence" SKIP "needs a bios and tests/own/chimera-padtest.iso"
 else
 	gd="$work/gun"
 	mkdir -p "$gd"
 	cp "$bios" "$gd/bios.bin"
-	cp "$padelf" "$gd/padtest.elf"
-	printf '{"disc":["padtest.elf"]}' > "$gd/slots"
+	cp "$padelf" "$gd/chimera-padtest.iso"
+	printf '{"disc":["chimera-padtest.iso"]}' > "$gd/slots"
 
 	# ---- on the USB bus, and only when asked -------------------------------
 	printf '{"port1":"dualshock2","verbose":true}' > "$gd/settings"
@@ -958,8 +998,8 @@ else
 	elif ! grep -q "Creating a GunCon 2 in port 1" "$work/gun.on.err" "$work/gun.on.out"; then
 		report "gun:bus" FAIL "a port set to guncon2 put nothing on the USB bus"
 	else
-		# ...and the controller socket is now empty, which padtest.elf - which
-		# reads the SIO bus and nothing else - shows by reading a dead port.
+		# ...and the controller socket is now empty, which chimera-padtest -
+		# which reads the SIO bus and nothing else - shows by reading a dead port.
 		printf '{"port1":"dualshock2"}' > "$gd/settings"
 		withpad="$("$nat/run-native" "$gd" --frames 200 2>/dev/null | digests)"
 		printf '{"port1":"guncon2"}' > "$gd/settings"
@@ -1029,7 +1069,7 @@ fi
 # It cannot be answered here, and saying so is the point. A PS2 does not poll a
 # USB device on its own: a program loads the USB driver, opens the gun and asks
 # it where it is pointing, and only then does anything this core wrote become
-# visible to the machine. padtest.elf reads the controller bus. So the last
+# visible to the machine. chimera-padtest reads the controller bus. So the last
 # link in the chain - the frontend's two axes arriving as the coordinates a
 # game reads - waits for one of the discs the gun was built for.
 # PCSX2_GUN_DISC names one (Time Crisis II is what this was written against);
@@ -1278,13 +1318,13 @@ chimera_root="${CHIMERA_ROOT:-}"
 done
 crun="$chimera_root/build/meson-linux/chimera-run"
 cpkg="$chimera_root/build/Cores/pcsx2.chimeraCore"
-if [ -z "$chimera_root" ] || [ ! -x "$crun" ] || [ ! -f "$cpkg" ] || [ -z "$bios" ] || [ ! -f "$padelf" ]; then
-	report "ports:columns" SKIP "needs chimera-run, a built pcsx2.chimeraCore, a bios and padtest.elf (set CHIMERA_ROOT; looked in $root/chimera-checkout, $root/../../chimera, $HOME/chimera)"
+if [ -z "$chimera_root" ] || [ ! -x "$crun" ] || [ ! -f "$cpkg" ] || [ -z "$bios" ] || [ ! -f "$padexe" ]; then
+	report "ports:columns" SKIP "needs chimera-run, a built pcsx2.chimeraCore, a bios and tests/own/chimera-padtest.elf (set CHIMERA_ROOT; looked in $root/chimera-checkout, $root/../../chimera, $HOME/chimera)"
 else
 	printf '[Input]\nLogKey:#\n' > "$work/none.txt"
 	wrong=""
 	check() { # <settings> <expected entry> <what it means>
-		got="$("$crun" "$cpkg" "$padelf" "$work/none.txt" --settings "$1" \
+		got="$("$crun" "$cpkg" "$padexe" "$work/none.txt" --settings "$1" \
 			--frames 1 --record "$work/shape.txt" --firmware "bios.bin=$bios" \
 			>/dev/null 2>&1 && head -1 "$work/shape.txt")"
 		[ "$got" = "$2" ] || wrong="$wrong; $3 gave [${got:-nothing}] want [$2]"
@@ -1324,7 +1364,7 @@ fi
 # frame, in the runner whose purpose is to stand in for the frontend
 # (~/chimera/docs/gates.md, mode C).
 #
-# This leg runs padtest.elf through run-wbx with the bridge up and holds the
+# This leg runs chimera-padtest through run-wbx with the bridge up and holds the
 # dispatcher to having answered every opcode the guest sent. It does NOT
 # compare pictures: this runner has no native GL flavour to compare against
 # (run-native draws with the softpipe), and llvmpipe is not a driver. What it
@@ -1332,12 +1372,12 @@ fi
 # GL context, a core.wbx built without the guest wrappers.
 gb="$work/gpu-bridge"
 if [ -z "$bios" ] || [ ! -f "$padelf" ]; then
-	report "gpu:bridge" SKIP "needs a bios and padtest.elf"
+	report "gpu:bridge" SKIP "needs a bios and tests/own/chimera-padtest.iso"
 else
 	mkdir -p "$gb"
 	cp "$bios" "$gb/bios.bin"
-	cp "$padelf" "$gb/padtest.elf"
-	printf '{"disc":["padtest.elf"]}' > "$gb/slots"
+	cp "$padelf" "$gb/chimera-padtest.iso"
+	printf '{"disc":["chimera-padtest.iso"]}' > "$gb/slots"
 	printf '{"renderer":"opengl-hw"}' > "$gb/settings"
 	CHIMERA_GPU=1 "$nat/run-wbx" "$gst/core.wbx" "$gb" --frames 60 2>"$work/gbridge.err" | digests > "$work/gbridge.txt"
 	if ! grep -q '^gpu bridge:' "$work/gbridge.err"; then
@@ -1353,7 +1393,7 @@ else
 	elif ! grep -q '^frames=60$' "$work/gbridge.txt"; then
 		report "gpu:bridge" FAIL "the run did not complete 60 frames: $(grep -v '^\s*$' "$work/gbridge.err" | tail -1 | cut -c1-100)"
 	else
-		report "gpu:bridge" PASS "60 frames of padtest.elf on $(grep -m1 '^gpu bridge: [0-9]' "$work/gbridge.err" | sed 's/gpu bridge: //' | cut -c1-50), every opcode the guest sent had a case"
+		report "gpu:bridge" PASS "60 frames of chimera-padtest on $(grep -m1 '^gpu bridge: [0-9]' "$work/gbridge.err" | sed 's/gpu bridge: //' | cut -c1-50), every opcode the guest sent had a case"
 	fi
 fi
 
@@ -1365,17 +1405,17 @@ fi
 # on this computer - one that draws on the processor will do (Mesa's lavapipe)
 # - and says SKIP without one.
 #
-# What these do NOT stand in for: padtest.elf is not a game and lavapipe is not
+# What these do NOT stand in for: chimera-padtest is not a game and lavapipe is not
 # a graphics card. What a game drew on a GTX 1060 is in docs/PLAN.md.
 vk_legs="vk:bridge vk:machine vk:picture vk:rerecord"
 if [ -z "$bios" ] || [ ! -f "$padelf" ]; then
-	for leg in $vk_legs; do report "$leg" SKIP "needs a bios and padtest.elf"; done
+	for leg in $vk_legs; do report "$leg" SKIP "needs a bios and tests/own/chimera-padtest.iso"; done
 else
 	vkw="$work/vulkan"
 	mkdir -p "$vkw"
 	cp "$bios" "$vkw/bios.bin"
-	cp "$padelf" "$vkw/padtest.elf"
-	printf '{"disc":["padtest.elf"]}' > "$vkw/slots"
+	cp "$padelf" "$vkw/chimera-padtest.iso"
+	printf '{"disc":["chimera-padtest.iso"]}' > "$vkw/slots"
 	# <name> <renderer> <run-wbx options...>: the run's output in $work/vk.<name>.txt and .err
 	vkrun() {
 		vkname="$1"; printf '{"renderer":"%s"}' "$2" > "$vkw/settings"; shift 2
@@ -1396,7 +1436,7 @@ else
 	else
 		refused="$(grep -c 'calls were refused' "$work/vk.v300.err")"
 		if [ -n "$vk_card" ] && [ "$refused" -eq 0 ] && grep -q '^frames=300$' "$work/vk.v300.txt"; then
-			report "vk:bridge" PASS "300 frames of padtest.elf on a Vulkan device ($vk_card), and no command the renderer sent was refused"
+			report "vk:bridge" PASS "300 frames of chimera-padtest on a Vulkan device ($vk_card), and no command the renderer sent was refused"
 		else
 			report "vk:bridge" FAIL "device [${vk_card:-none made}], runs with refused commands: $refused, $(grep -v '^\s*$' "$work/vk.v300.err" | tail -1 | cut -c1-100)"
 		fi
@@ -1460,12 +1500,12 @@ fi
 # threshold. Restoring frame 0 and restoring frame 2 must both rebuild - it is
 # the DIFFERENCE between them that was the bug, so both are asserted.
 #
-# WHAT THIS DOES NOT STAND IN FOR (docs/gates.md, E): padtest.elf is not a
+# WHAT THIS DOES NOT STAND IN FOR (docs/gates.md, E): chimera-padtest is not a
 # game, llvmpipe is not a driver, and this leg proves the rebuild RUNS, not
 # that a real game's picture is right on real hardware. The screenshot in the
 # issue is the only evidence of the latter, and it is a user's.
 if [ -z "$chimera_root" ] || [ ! -x "$crun" ] || [ ! -f "$cpkg" ] || [ -z "$bios" ] || [ ! -f "$padelf" ]; then
-	report "gl:rebuild-at-zero" SKIP "needs chimera-run, a built pcsx2.chimeraCore, a bios and padtest.elf (set CHIMERA_ROOT)"
+	report "gl:rebuild-at-zero" SKIP "needs chimera-run, a built pcsx2.chimeraCore, a bios and tests/own/chimera-padtest.iso (set CHIMERA_ROOT)"
 else
 	gz="$work/glzero"
 	mkdir -p "$gz"
@@ -1543,7 +1583,7 @@ else
 		# after a load used to be (wrong for four, through llvmpipe as on the
 		# card - the deinterlacer needs four fields to forget).
 		#
-		# WHAT IT DOES NOT STAND IN FOR: padtest.elf's picture holds still, and
+		# WHAT IT DOES NOT STAND IN FOR: chimera-padtest's picture moves only by its bar, and
 		# llvmpipe is not a driver. The proof on a moving 3D scene, on a real
 		# card, is in docs/PLAN.md - and so is what does not come back above the
 		# machine's own resolution.

@@ -1272,3 +1272,58 @@ ignores the field. The labels were generated from the firmware entries, so
 every one of the 73 console values and 4 arcade values has one. In the same
 Chimera change, the wizard lists first the Boot ROMs whose file is on hand,
 marked "(found)".
+
+## 2026-10-19: an open BIOS and a program of our own, so CI runs the machine (user-decided)
+
+Until now the CI could not run a single instruction of the machine: a PS2
+needs a BIOS, and a retail one is somebody's dump. OpenPS2BIOS
+(TamaribaEmu/OpenPS2BIOS, MIT, no Sony code, made for emulators and tested in
+PCSX2) changes that. The owner chose it as a pinned submodule built in CI
+(not a download), and a homebrew disc of our own in the repository, with its
+licence.
+
+- **The BIOS.** `extern/openps2bios`, pinned at the v0.2 release tag.
+  `waterbox/build-openps2bios.sh` builds it with LLVM 23 - what upstream
+  builds its releases with - and checks the result against the SHA-256
+  upstream published: LLVM 23.1.4 gives the released bytes exactly, LLVM 20
+  differs in 170,054 of 4 MiB (and needs its unknown `nonstring` attribute
+  ignored). CI installs LLVM 23 from apt.llvm.org. The gate falls back to it
+  when no retail BIOS is found; it is not in the package.
+- **The program.** `tests/own/chimera-padtest` (MIT; linked with ps2sdk and
+  gsKit, AFL-2.0, and newlib): a cell per button for both ports, lit while
+  held, and a bar that grows a pixel a frame, drawn into one framebuffer once
+  and then only where it changes, so a renderer that loses the GS's memory
+  across a load shows it. Built with the ps2dev/ps2dev v2.0.0 image (unpacked
+  and run chrooted in a user namespace, no Docker here); the ELF and the disc
+  build byte for byte the same each time. It replaces `padtest.elf` (no
+  licence for passing it on) in every check that ran it.
+- **What OpenPS2BIOS needed of the program** (each found by its console
+  output, `"verbose":true`): ps2sdk's libc start-up opens the IOP's file
+  services over SIF before main and never returns there, so it is left out
+  (nothing here uses files); ps2sdk's patch that lets a retail BIOS load a
+  module from memory never returns on OpenPS2BIOS, which can already, while
+  a retail BIOS never answers a load without it - so the program looks for
+  OpenPS2BIOS's name in the ROM (read through the kernel, kCopyBytes; reading
+  it directly is refused there) and patches only a retail BIOS. It loads
+  ps2sdk's own pad drivers (freesio2, freepad) from inside itself, so the
+  pads read alike on both.
+- **Measured** (this machine, CHIMERA_ROOT my own worktree): with the retail
+  BIOS 44 passed, 0 failed, 6 skipped - the same as before with padtest.elf;
+  on OpenPS2BIOS 38 passed, 0 failed, 13 skipped. The seven that need a
+  retail BIOS say SKIP with why: `input:shaped` and `input:lag` (OpenPS2BIOS's
+  own boot screen does not read the pad), `savedata:roundtrip` (no memory
+  card read back), `pad:elf` (it starts discs only, not an executable),
+  `discs:swap`, `video:deinterlace` and `video:steady` (its boot screen is
+  not interlaced). Seen to fail on the way: the pad checks with the program
+  black (before the start-up was fixed), and `ports:columns` and the two
+  picture-after-load checks on the first version of the program (a disc adds
+  the tray's column; a picture redrawn whole every frame hides a lost one),
+  both caught by Chimera-Desktop's run.
+- An earlier comparison of the two BIOSes ran Chimera's runner from
+  `~/chimera`, a peer's uncommitted build rebuilt during the run; its numbers
+  are not used here.
+
+Not decided: whether `padtest.elf` stays in `tests/own` (nothing runs it now),
+and whether the package should accept OpenPS2BIOS as firmware, which would let
+the frontend test run on CI too and would show it to users.
+

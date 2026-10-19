@@ -3,13 +3,18 @@ name: chimera waterbox core
 # The core as Chimera ships it: a sandboxed core.wbx package.
 #
 # What this job can prove on a public runner is bounded by content. A
-# PlayStation 2 has no HLE bios, so nothing here executes an instruction: what
-# CI proves is that both flavors BUILD from a clean checkout, that the sandbox
-# loads and starts the guest, and that a machine with no bios refuses clearly
-# in both of them. Everything else the gate can check - equivalence, the
-# savestate round-trip, input, the picture, save data, a disc - needs a dump,
-# reports SKIP here, and is run by hand against the developer's own content
-# (waterbox/run-gate.sh says so on every line).
+# PlayStation 2 needs a bios, and a retail one is somebody's dump. So the
+# core gate runs its bios tier on OpenPS2BIOS, an open, MIT-licensed
+# replacement built here from the extern/openps2bios submodule (pinned at its
+# v0.2 release, checked against the bytes upstream released), and on
+# chimera-padtest, this repository's own test program on its own disc
+# (tests/own): both flavors build and agree, the machine runs, savestates
+# round-trip, the pads reach the machine button by button, the light gun
+# empties its socket, the renderers draw. What OpenPS2BIOS cannot do (read
+# the pad from its own boot screen, read a memory card back, an interlaced
+# picture, an executable with no disc) reports SKIP and says why, and runs by
+# hand against the developer's own retail bios, as does everything that needs
+# a game's disc (waterbox/run-gate.sh says so on every line).
 
 on:
   pull_request:
@@ -46,7 +51,7 @@ env:
 jobs:
 
   core-gate:
-    name: core gate (builds, starts, refuses without a bios)
+    name: core gate (builds, refuses without a bios, runs on OpenPS2BIOS)
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
@@ -93,6 +98,20 @@ jobs:
         # 24.0.9 - Chimera used to carry it as a submodule and does not any
         # more. bash, not sh: the script uses `set -o pipefail`.
         run: bash waterbox/setup-mesa.sh -m "$PWD/chimera-checkout/extern/chimera-common-minibox"
+
+      - name: Install LLVM 23 (OpenPS2BIOS is built with it)
+        # apt.llvm.org's LLVM 23, as upstream builds its releases with: another
+        # LLVM compiles the BIOS into other bytes, and build-openps2bios.sh
+        # checks them against the release's
+        run: |
+          . /etc/os-release
+          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc > /dev/null
+          echo "deb http://apt.llvm.org/$VERSION_CODENAME/ llvm-toolchain-$VERSION_CODENAME-23 main" | sudo tee /etc/apt/sources.list.d/llvm-23.list
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang-23 lld-23 llvm-23
+
+      - name: Build OpenPS2BIOS (the open bios the gate's bios tier runs on)
+        run: sh waterbox/build-openps2bios.sh
 
       - name: Build the native reference and sandbox drivers
         run: |
