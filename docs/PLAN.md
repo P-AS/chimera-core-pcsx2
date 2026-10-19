@@ -202,6 +202,11 @@ pad driver - and the count stops growing the moment it has.
     unsigned, Apple's signed), and `-ffixed-x18` for the guest and its Mesa,
     held by `waterbox/check-portable.sh` on every guest link. Negative
     control: run over the native build's objects it fails on lz4 and others.
+  - *The thread pointer.* miniBox's aarch64 machine keeps it in a word of
+    memory, not TPIDR_EL0, which macOS overwrites at every context switch;
+    `core.wbx` is `core-linked.wbx` rewritten by miniBox's
+    `wbx-tp-rewrite.py` (7015 reads in the image CI built from c43dbae), and
+    `check-portable.sh` fails an image that still reaches the register.
   - *Measured* on Asahi Linux (Apple M1, 16 KiB pages), without a bios: the
     gate's six content-free checks pass (`keybinds`, `arcade:panel-words`,
     `nobios:refuses`, `cpu:cores`, `gamedb:loaded`, `gamedb:entry`), so both
