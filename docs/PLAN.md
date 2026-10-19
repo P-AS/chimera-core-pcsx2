@@ -1327,3 +1327,14 @@ Not decided: whether `padtest.elf` stays in `tests/own` (nothing runs it now),
 and whether the package should accept OpenPS2BIOS as firmware, which would let
 the frontend test run on CI too and would show it to users.
 
+Later the same day the owner had CI run the GPU bridge checks and the ones
+that open a project with `chimera-run` too. The core gate job now builds
+`run-wbx` with `-Dgl_bridge=true`, installs Mesa's software OpenGL and
+Vulkan (the runner has no graphics card), builds Chimera's engine and the
+package, and sets `CHIMERA_ROOT` to that Chimera. That adds `ports:columns`,
+`gpu:bridge`, `vk:bridge`, `vk:machine`, `vk:picture`, `vk:rerecord`,
+`gl:rebuild-at-zero`, `gl:readback-after-zero`, `gl:picture-after-load` and
+`vk:picture-after-load`, which all passed here on OpenPS2BIOS (with
+lavapipe for Vulkan). On the runner they draw in software, so they prove the
+bridges and the rebuild after a load, not a card's picture.
+

@@ -27,11 +27,17 @@ mb="$chimera/extern/chimera-common-minibox"
 
 **Operating system.** CI builds on GitHub's `ubuntu-latest` runner, x86-64.
 
-**Packages for the core and the core gate** (workflow job `core-gate`):
+**Packages for the core and the core gate** (workflow job `core-gate`). The
+second line builds Chimera's engine, for `chimera-run`, and the GPU bridges'
+host half (EGL); the third is what the bridges draw on in CI, which has no
+graphics card: Mesa's software OpenGL (llvmpipe) and Vulkan (lavapipe), and
+the Vulkan loader. LLVM 23 for OpenPS2BIOS comes from apt.llvm.org (below).
 
 ```sh
 sudo apt-get update
-sudo apt-get install -y --no-install-recommends meson ninja-build build-essential python3 bison flex pkg-config python3-mako python3-packaging
+sudo apt-get install -y --no-install-recommends meson ninja-build build-essential python3 bison flex pkg-config python3-mako python3-packaging \
+  cmake libgl1-mesa-dev libegl-dev libx11-dev libxext-dev libasound2-dev \
+  libegl-mesa0 libgl1-mesa-dri libvulkan1 mesa-vulkan-drivers
 ```
 
 **Packages for the frontend gate** (workflow job `frontend-gate`, which also
@@ -103,9 +109,10 @@ git clone https://github.com/ToolAssisted-run/chimera.git "$chimera"
 git -C "$chimera" submodule update --init extern/chimera-common-minibox
 ```
 
-That is enough to build the core, the package and the core gate. The frontend
-gate builds Chimera too, and for that CI checks Chimera out with
-`submodules: recursive`:
+That is enough to build the core and the package. Both gates also build
+Chimera itself (the core gate for `chimera-run`, Chimera's command-line
+runner, which some of its checks open a project with), and for that CI
+fetches all of Chimera's submodules:
 
 ```sh
 git -C "$chimera" submodule update --init --recursive
@@ -194,11 +201,11 @@ ninja -C build/meson-native
 
 This builds `run-native` (the reference) and `run-wbx` (the driver that runs
 `core.wbx` through the miniBox host library). CI configures it without
-`-Dmesa_guest_dir`. The frontend gate needs only
+`-Dmesa_guest_dir`, and with `-Dgl_bridge=true` (below). The frontend gate needs only
 `ninja -C build/meson-native run-native`.
 
 Two more options exist for the native build (`meson_options.txt`). CI sets
-neither:
+the first:
 
 - `-Dgl_bridge=true` builds the host half of the GPU bridge
   (`waterbox/gl-host.c`) into `run-wbx`, and with it the host half of
@@ -369,6 +376,12 @@ own test program on its own disc (source, build and licence in
 | `vk:settings` | `PCSX2_GFX_DISC` as for `gpu:picture`, and a Vulkan driver |
 | `vk:picture-after-load` | `chimera-run` and the installed package as for `gl:rebuild-at-zero`, from a Chimera at commit 4ca6e30 or later, and a Vulkan driver |
 | `ports:columns`, `gl:rebuild-at-zero` | `<chimera>/build/meson-linux/chimera-run` and the installed `<chimera>/build/Cores/pcsx2.chimeraCore`; found through `$CHIMERA_ROOT`, then `chimera-checkout/`, `../../chimera`, `../chimera`, `$HOME/chimera` |
+
+CI builds all of the last two rows' needs, so on OpenPS2BIOS it runs the
+`gpu:bridge`, `vk:*` and `gl:*` checks and `ports:columns` too, on Mesa's
+software drivers. Those prove the bridges answer every call the renderers
+make and that a project can go back to frame 0 and draw again; they do not
+prove what a graphics card draws.
 
 **The arcade boards** carry their own bios, so their checks do not need the
 console's. They run once per board when a folder is named, and SKIP

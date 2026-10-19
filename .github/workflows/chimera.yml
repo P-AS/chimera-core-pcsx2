@@ -10,7 +10,11 @@ name: chimera waterbox core
 # chimera-padtest, this repository's own test program on its own disc
 # (tests/own): both flavors build and agree, the machine runs, savestates
 # round-trip, the pads reach the machine button by button, the light gun
-# empties its socket, the renderers draw. What OpenPS2BIOS cannot do (read
+# empties its socket, the renderers draw, on the processor and through the
+# GPU bridges to Mesa's software OpenGL and Vulkan (llvmpipe and lavapipe:
+# no graphics card, so these prove the bridges answer every call, not what a
+# card draws), and a project opened by Chimera's own runner, chimera-run, can
+# go back to frame 0 and still draw. What OpenPS2BIOS cannot do (read
 # the pad from its own boot screen, read a memory card back, an interlaced
 # picture, an executable with no disc) reports SKIP and says why, and runs by
 # hand against the developer's own retail bios, as does everything that needs
@@ -51,7 +55,7 @@ env:
 jobs:
 
   core-gate:
-    name: core gate (builds, refuses without a bios, runs on OpenPS2BIOS)
+    name: core gate (builds, refuses without a bios, runs on OpenPS2BIOS, GPU bridges on software drivers)
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
@@ -68,14 +72,22 @@ jobs:
           submodules: false
 
       - name: Install build dependencies
+        # The second line is for Chimera's engine (chimera-run, which the
+        # tests that open a project use) and for the GPU bridges' host half
+        # in run-wbx (EGL); the third is what those draw on here, Mesa's
+        # software OpenGL (llvmpipe) and Vulkan (lavapipe), with the Vulkan
+        # loader.
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends meson ninja-build build-essential python3 bison flex pkg-config python3-mako python3-packaging
+          sudo apt-get install -y --no-install-recommends meson ninja-build build-essential python3 bison flex pkg-config python3-mako python3-packaging \
+            cmake libgl1-mesa-dev libegl-dev libx11-dev libxext-dev libasound2-dev \
+            libegl-mesa0 libgl1-mesa-dri libvulkan1 mesa-vulkan-drivers
 
-      - name: Check out miniBox and the guest Mesa
+      - name: Check out miniBox and the rest of Chimera's submodules
+        # all of them: the engine is built below, for chimera-run
         working-directory: chimera-checkout
         run: |
-          git submodule update --init extern/chimera-common-minibox
+          git submodule update --init --recursive
 
       - name: Cache the guest toolchain
         uses: actions/cache@v4
@@ -114,8 +126,10 @@ jobs:
         run: sh waterbox/build-openps2bios.sh
 
       - name: Build the native reference and sandbox drivers
+        # -Dgl_bridge=true: run-wbx carries the GPU bridges' host half, so the
+        # gpu: and vk: checks run instead of saying SKIP
         run: |
-          meson setup build/meson-native -Dminibox_dir="$PWD/chimera-checkout/extern/chimera-common-minibox"
+          meson setup build/meson-native -Dminibox_dir="$PWD/chimera-checkout/extern/chimera-common-minibox" -Dgl_bridge=true
           ninja -C build/meson-native
 
       - name: Build the waterbox core
@@ -125,8 +139,21 @@ jobs:
                -Dmesa_guest_dir="$PWD/build/mesa"
           ninja -C build/meson-guest
 
+      - name: Build Chimera's engine (chimera-run)
+        working-directory: chimera-checkout
+        run: |
+          meson setup build/meson-linux --prefix "$PWD/build" --libdir dll
+          meson compile -C build/meson-linux
+          meson install -C build/meson-linux
+
+      - name: Build the package and install it into that Chimera
+        # for the checks that open a project through chimera-run
+        # (ports:columns, gl:*, vk:picture-after-load). The frontend gate
+        # builds the one that is published.
+        run: ./waterbox/build-package.sh -m "$PWD/chimera-checkout/extern/chimera-common-minibox" -r "$PWD/chimera-checkout"
+
       - name: Core gate
-        run: ./waterbox/run-gate.sh
+        run: CHIMERA_ROOT="$PWD/chimera-checkout" ./waterbox/run-gate.sh
 
       - name: Upload core.wbx
         uses: actions/upload-artifact@v7
