@@ -1338,3 +1338,35 @@ package, and sets `CHIMERA_ROOT` to that Chimera. That adds `ports:columns`,
 lavapipe for Vulkan). On the runner they draw in software, so they prove the
 bridges and the rebuild after a load, not a card's picture.
 
+
+## 2026-10-19: OpenPS2BIOS is a Boot ROM the package accepts, and padtest.elf is gone (user-decided)
+
+The owner answered the two questions left open above.
+
+- **`padtest.elf` is removed** from `tests/own`, with `waterbox/tests/pad-cells.py`,
+  which read its picture. Nothing ran either since chimera-padtest replaced
+  them, and no licence was found that let us pass the file on.
+- **OpenPS2BIOS 0.2 is a choice of the Boot ROM setting** (`openps2bios-0.2`,
+  last in the list), with a firmware entry pinned to the released file,
+  `OpenPS2BIOS-0.2.bin` (SHA-1 BCE30600..., the same bytes
+  `build-openps2bios.sh` builds). Its description says where to download it,
+  that it holds no Sony code, and what it cannot do yet: start a lone
+  executable, read a memory card back. It says too that this core was
+  tested on it only with its own test program. The default stays the retail
+  USA v2.30.
+- With no disc, the core picks the field rate from the Boot ROM's region
+  letter. It now reads that letter only from a retail value (`ps2-...`) and
+  takes NTSC for any other, which is what OpenPS2BIOS is (its ROMVER,
+  `0002AD20261017`, says USA) and what the arcade values already got.
+- **The frontend test runs on CI.** `run-frontend.sh` falls back to the built
+  OpenPS2BIOS and to `tests/own/chimera-padtest.iso` (or takes
+  `CHIMERA_PS2_DISC`), and names the Boot ROM by the bios file's SHA-1 as the
+  wizard would, not by its file name. The frontend job builds OpenPS2BIOS
+  as the core job does.
+- **Measured** (this machine): the frontend test on OpenPS2BIOS and the test
+  disc, 2 passed (`disc:frontend`, `keybinds`), 2 skipped (`settings:clock`:
+  the test disc does not read the clock; `bios:default`: needs the retail
+  default); on the retail BIOS and a game, 3 passed, 1 skipped (the game does
+  not read the clock in 200 frames either), with the Boot ROM now found by
+  SHA-1. The core gate on the retail BIOS: 44 passed, 0 failed, 6 skipped,
+  the same checks as before. The package's contract tests: 20 passed.

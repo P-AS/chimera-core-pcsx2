@@ -166,10 +166,11 @@ jobs:
 
   frontend-gate:
     # The other half: the package running inside the real frontend (Chimera
-    # headless under Mono and Xvfb, through the generic waterbox adapter). Like
-    # the core gate it is bounded by content - without a bios its three checks
-    # report SKIP - but the package is BUILT here either way, which is what
-    # publishes the artifact and proves the packaging is deterministic.
+    # headless under Mono and Xvfb, through the generic waterbox adapter). The
+    # package accepts OpenPS2BIOS as a Boot ROM, so its checks run on it, with
+    # this repository's own test disc; the one that needs the console's
+    # default retail bios says SKIP. This job also BUILDS the package, which is
+    # what publishes the artifact and proves the packaging is deterministic.
     name: frontend gate (Chimera)
     runs-on: ubuntu-latest
     timeout-minutes: 120
@@ -246,6 +247,20 @@ jobs:
         env:
           CORE_VERSION: ${{ github.sha }}
         run: ./waterbox/build-package.sh -m "$PWD/chimera-checkout/extern/chimera-common-minibox" -r "$PWD/chimera-checkout"
+
+      - name: Install LLVM 23 (OpenPS2BIOS is built with it)
+        # apt.llvm.org's LLVM 23, as upstream builds its releases with: another
+        # LLVM compiles the BIOS into other bytes, and build-openps2bios.sh
+        # checks them against the release's
+        run: |
+          . /etc/os-release
+          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc > /dev/null
+          echo "deb http://apt.llvm.org/$VERSION_CODENAME/ llvm-toolchain-$VERSION_CODENAME-23 main" | sudo tee /etc/apt/sources.list.d/llvm-23.list
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang-23 lld-23 llvm-23
+
+      - name: Build OpenPS2BIOS (the open bios the frontend gate runs on)
+        run: sh waterbox/build-openps2bios.sh
 
       - name: Frontend gate
         run: ./waterbox/tests/run-frontend.sh --chimera-root "$GITHUB_WORKSPACE/chimera-checkout"

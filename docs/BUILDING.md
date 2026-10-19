@@ -421,19 +421,23 @@ Then, from this repository, with the package installed and `run-native` built:
 Options: `--chimera-root <path>` and `--frames N` (default 200). Logs and
 dumps go to `waterbox/tests/work/`.
 
-It needs a bios and a disc, found as the core gate finds them. Without both,
-its three checks report SKIP and it exits successfully - which is what CI
-does. The package is still built and published by that job.
+It needs a bios and a disc. The bios is found as the core gate finds it:
+`$CHIMERA_PS2_BIOS`, the first `*.bin` in `tests/roms/bios/`, else the built
+OpenPS2BIOS, which the package accepts as a Boot ROM. The disc is
+`$CHIMERA_PS2_DISC`, the first `*.iso` or `*.bin` in `tests/roms/`, else
+`tests/own/chimera-padtest.iso`. CI runs it on OpenPS2BIOS and that disc, so
+it needs `waterbox/build-openps2bios.sh` run first, as the core gate does.
 
 | Check | What it holds |
 | --- | --- |
 | `disc:frontend` | a disc through Chimera: EE RAM equals the native reference |
-| `settings:clock` | a machine-shaping setting (the console's clock) reaches the guest through the frontend |
+| `settings:clock` | a machine-shaping setting (the console's clock) reaches the guest through the frontend; SKIP when the disc does not read the clock |
+| `bios:default` | a project that names no Boot ROM gets the console's default and starts; SKIP unless the bios is that default's dump |
 | `keybinds` | the package's key bindings become the frontend's defaults |
 
-The gate passes the bios file's base name, without `.bin`, as the project's
-`bios` setting. Name the dump after the setting value it is, for example
-`ps2-0230a-20080220.bin`.
+The project names the Boot ROM whose firmware entry has the bios file's
+SHA-1, as the wizard would; a file the package does not know goes by its
+base name, without `.bin`.
 
 ## Files the core needs at run time
 
@@ -444,9 +448,15 @@ The user provides them. `waterbox/file_slots.json` and the `firmware` list in
 **PlayStation 2** (`machine` = `ps2`, the default)
 
 - Firmware, always required: `bios.bin`, a PlayStation 2 bios dump. There is
-  no HLE bios. The `bios` setting names which dump the project is (73
+  no HLE bios. The `bios` setting names which dump the project is (74
   choices; the default is `ps2-0230a-20080220`), and each is pinned by size
-  and SHA-1. A different release is a different machine.
+  and SHA-1. A different release is a different machine. The last choice,
+  `openps2bios-0.2`, is not a dump: it is OpenPS2BIOS 0.2, an open
+  replacement anyone may download from its
+  [release](https://github.com/TamaribaEmu/OpenPS2BIOS/releases/tag/v0.2) as
+  `OpenPS2BIOS-0.2.bin` (`waterbox/build-openps2bios.sh` builds the same
+  bytes, for the tests). It starts discs, not a lone `.elf`, and does not
+  read a memory card back, so a game may not run on it.
 - Disc or program: one file. A DVD or CD image (`.iso`, `.bin`, `.img`,
   `.chd`, `.cso`, `.zso`, `.gz`) or a PS2 executable (`.elf`).
 - Save data, optional, up to 3 files: `memcard1.ps2`, `memcard2.ps2` and
@@ -508,8 +518,8 @@ refuses to start where no Vulkan is handed over.
   ignored by git wholesale, so nothing put there can be committed by
   accident.
 - **Checks say `needs chimera-run, a built pcsx2.chimeraCore, a bios and
-  padtest.elf`.** Set `CHIMERA_ROOT` to a Chimera checkout whose natives are
-  built and where the package is installed.
+  tests/own/chimera-padtest.elf`.** Set `CHIMERA_ROOT` to a Chimera checkout
+  whose natives are built and where the package is installed.
 - **The frontend gate stops with `Chimera not built`, `package not installed`
   or `native reference not built`.** Build Chimera, run `build-package.sh`,
   or build `run-native`, respectively. These are checked before the content

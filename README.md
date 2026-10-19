@@ -7,8 +7,8 @@ Upstream is `PCSX2/pcsx2`, pinned as a submodule at `extern/pcsx2`.
 Two things make this port different from every other core in the bundle. It
 comes with a real SOFTWARE renderer, maintained upstream for accuracy, so the
 picture is not the problem it was for Flycast. And it cannot run ANYTHING
-without a bios - a PS2 has no HLE bios - so what its gate can prove depends on
-content the user supplies locally (never committed; see .gitignore).
+without a bios - a PS2 has no HLE bios. Besides the console's own, the package
+accepts OpenPS2BIOS, an open replacement, which the tests and CI run on.
 
 The CPUs are a setting (`cpu_core`): PCSX2's recompilers for the EE, the IOP
 and both vector units, which is the default, or its interpreters. They are
@@ -28,7 +28,11 @@ package from this repository's
 [Releases](https://github.com/ToolAssisted-run/chimera-core-pcsx2/releases)
 page, or build it, and put it in the `Cores` folder beside `Chimera.exe`;
 File > Core Manager lists what is there. The same file runs on Linux and on
-Windows. The bios and the games are yours to provide.
+Windows. The games are yours to provide, and so is the bios: a copy of your
+own console's, or OpenPS2BIOS 0.2
+([download](https://github.com/TamaribaEmu/OpenPS2BIOS/releases/tag/v0.2),
+Boot ROM setting "OpenPS2BIOS 0.2"), which is free but does less, so a game
+may not run on it.
 
 ## Building
 
@@ -58,7 +62,8 @@ It runs in tiers, because a PS2 needs a bios to do anything at all:
 
 - **with nothing**: both flavors must refuse a machine with no bios, and say
   why. That is the path every user without a dump meets first.
-- **with a bios** in `tests/roms/bios/` (or `$CHIMERA_PS2_BIOS`): equivalence,
+- **with a bios** in `tests/roms/bios/` (or `$CHIMERA_PS2_BIOS`, else
+  OpenPS2BIOS built from `extern/openps2bios`): equivalence,
   the savestate round-trip, determinism, the memory domains, the picture, the
   pad, lag counting, and the save-data channel carrying the memory cards and
   the console's NVRAM.

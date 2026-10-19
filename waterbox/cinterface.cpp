@@ -2142,10 +2142,11 @@ static void DecideFieldRate(bool verbose)
 	else
 	{
 		/* the setting's value names the dump: ps2-0220e-20060210 - the letter
-		 * after the version is the region */
+		 * after the version is the region. OpenPS2BIOS (openps2bios-0.2) is
+		 * an American console: its ROMVER is 0002AD20261017 */
 		char bios[64] = "";
 		wbx_setting_str("bios", bios, sizeof(bios));
-		const char region = strlen(bios) > 8 ? bios[8] : '\0';
+		const char region = strncmp(bios, "ps2-", 4) == 0 && strlen(bios) > 8 ? bios[8] : 'a';
 		pal = region == 'e' || region == 'r';
 		why = pal ? "no disc; a PAL-region bios" : "no disc; an NTSC-region bios";
 	}

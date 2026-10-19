@@ -61,16 +61,34 @@ bios="${CHIMERA_PS2_BIOS:-}"
 if [ -z "$bios" ]; then
 	bios="$(find "$root/tests/roms/bios" -maxdepth 1 -name '*.bin' 2>/dev/null | sort | head -1)"
 fi
-disc="$(find "$root/tests/roms" -maxdepth 1 \( -name '*.iso' -o -name '*.bin' \) 2>/dev/null | sort | head -1)"
+# no console bios of the developer's own: OpenPS2BIOS, the open one the package
+# accepts too, as waterbox/build-openps2bios.sh builds it (what CI runs)
+if [ -z "$bios" ] && [ -f "$root/build/openps2bios/OpenPS2BIOS.bin" ]; then
+	bios="$root/build/openps2bios/OpenPS2BIOS.bin"
+fi
+disc="${CHIMERA_PS2_DISC:-}"
+[ -n "$disc" ] || disc="$(find "$root/tests/roms" -maxdepth 1 \( -name '*.iso' -o -name '*.bin' \) 2>/dev/null | sort | head -1)"
+# no game: this repository's own test program, on its own disc
+[ -n "$disc" ] || disc="$root/tests/own/chimera-padtest.iso"
 
 # Which bios this is, said out loud: the package declares one firmware entry per
 # dump, each nailed to a "bios" setting value, so the project has to name the one
-# it wants. The file the test found decides the value, which is what a user
-# choosing that bios in the wizard would have stored.
-bios_choice="$(basename "$bios" .bin)"
+# it wants - the value whose entry has this file's SHA-1, which is what a user
+# choosing that bios in the wizard would have stored. A file the package does
+# not know goes by its name, without .bin.
+bios_choice=""
+[ -z "$bios" ] || bios_choice="$(python3 -c "
+import hashlib, json, sys
+sha1 = hashlib.sha1(open(sys.argv[2], 'rb').read()).hexdigest().upper()
+for f in json.load(open(sys.argv[1]))['firmware']:
+    w = f.get('requiredWhen', {})
+    if f.get('sha1', '').upper() == sha1 and w.get('setting') == 'bios':
+        print(w['is']); break
+" "$wb/waterbox.config" "$bios")"
+[ -n "$bios_choice" ] || bios_choice="$(basename "$bios" .bin)"
 
 if [ -z "$bios" ] || [ -z "$disc" ]; then
-	report "disc:frontend" SKIP "needs a bios in tests/roms/bios/ and a disc in tests/roms/"
+	report "disc:frontend" SKIP "needs a bios in tests/roms/bios/ (or OpenPS2BIOS built) and a disc"
 	report "settings:clock" SKIP "would prove a machine-shaping setting reaches the guest"
 	report "keybinds" SKIP "would prove the package's bindings become the frontend's"
 	echo
