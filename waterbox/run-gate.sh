@@ -821,8 +821,9 @@ else
 fi
 
 # PCSX2's own name for a card (chimera#156): the same card as Mcd001.ps2 is
-# the same machine, and leaves under the canonical name; a project carrying
-# the slot's card under both names is refused rather than guessed at.
+# the same machine, and leaves under the name it came as (chimera#328); a
+# project carrying the slot's card under both names is refused rather than
+# guessed at.
 pcsx2name="$work/mounted-pcsx2name"
 mkdir -p "$pcsx2name"
 cp "$bios" "$pcsx2name/bios.bin"
@@ -838,12 +839,65 @@ printf '{"savedata":["Mcd001.ps2","memcard1.ps2"]}' > "$pcsx2name/slots"
 both="$("$nat/run-wbx" "$gst/core.wbx" "$pcsx2name" --frames 1 2>&1 | tail -1)"
 if [ "$as_mcd" != "$with_card" ] || [ "$box_mcd" != "$with_card" ]; then
 	report "savedata:pcsx2-name" FAIL "a card called Mcd001.ps2 is not the machine memcard1.ps2 makes"
-elif ! cmp -s "$mounted/memcard1.ps2" "$sdp/memcard1.ps2"; then
-	report "savedata:pcsx2-name" FAIL "the card did not come back as memcard1.ps2"
+elif ! cmp -s "$mounted/memcard1.ps2" "$sdp/Mcd001.ps2" || [ -e "$sdp/memcard1.ps2" ]; then
+	report "savedata:pcsx2-name" FAIL "the card did not come back as Mcd001.ps2: $(ls "$sdp" | tr '\n' ' ')"
 else
 	case "$both" in
 		*"two cards for slot 1"*) report "savedata:pcsx2-name" PASS "Mcd001.ps2 is slot 1's card, native == sandbox; both names refused" ;;
 		*) report "savedata:pcsx2-name" FAIL "a project with both names was not refused: $both" ;;
+	esac
+fi
+
+# A card under any other name (chimera#328): it fills slot 1, then slot 2, in
+# the order the project lists the files, and leaves under its own name. A
+# third card, a card for a slot that is switched off, and a file that is no
+# card are refused.
+anyname="$work/mounted-anyname"
+mkdir -p "$anyname"
+cp "$bios" "$anyname/bios.bin"
+cp "$mounted/memcard1.ps2" "$anyname/THPS.ps2"
+python3 - "$mounted/memcard1.ps2" "$anyname/Other.ps2" <<'PYCARD2'
+import sys
+data = bytearray(open(sys.argv[1], "rb").read())
+data[32:48] = b"a second card..."
+open(sys.argv[2], "wb").write(bytes(data))
+PYCARD2
+cp "$mounted/memcard1.ps2" "$anyname/memcard1.ps2"
+printf '{}' > "$anyname/settings"
+printf '{"savedata":["THPS.ps2"]}' > "$anyname/slots"
+sda="$work/savedata-anyname"
+mkdir -p "$sda"
+as_thps="$("$nat/run-native" "$anyname" --frames 200 --savedata-out "$sda" 2>/dev/null | digests)"
+box_thps="$("$nat/run-wbx" "$gst/core.wbx" "$anyname" --frames 200 2>/dev/null | digests)"
+anyname_load() { # <slots json> [<settings json>]: the load error, or nothing
+	printf '%s' "$1" > "$anyname/slots"
+	printf '%s' "${2:-{\}}" > "$anyname/settings"
+	"$nat/run-wbx" "$gst/core.wbx" "$anyname" --frames 1 2>&1 | tail -1
+}
+two_named() { # <slots json>: the cards a run with both slots on exports
+	local out="$work/savedata-anyname2"
+	rm -rf "$out"; mkdir -p "$out"
+	printf '%s' "$1" > "$anyname/slots"
+	printf '{"memcard2":true}' > "$anyname/settings"
+	"$nat/run-native" "$anyname" --frames 60 --savedata-out "$out" > /dev/null 2>&1
+	(cd "$out" && ls | grep -v '^bios.nvm$' | LC_ALL=C sort | tr '\n' ' ' | sed 's/ $//')
+}
+pair="$(two_named '{"savedata":["THPS.ps2","Other.ps2"]}')"
+after_named="$(two_named '{"savedata":["Other.ps2","memcard1.ps2"]}')"
+third="$(anyname_load '{"savedata":["THPS.ps2","Other.ps2","memcard1.ps2"]}' '{"memcard2":true}')"
+off="$(anyname_load '{"savedata":["THPS.ps2","Other.ps2"]}')"
+notcard="$(anyname_load '{"savedata":["notes.txt"]}')"
+if [ "$as_thps" != "$with_card" ] || [ "$box_thps" != "$with_card" ]; then
+	report "savedata:any-name" FAIL "a card called THPS.ps2 is not the machine memcard1.ps2 makes (native == sandbox: $([ "$as_thps" = "$box_thps" ] && echo yes || echo no))"
+elif ! cmp -s "$anyname/THPS.ps2" "$sda/THPS.ps2" || [ -e "$sda/memcard1.ps2" ]; then
+	report "savedata:any-name" FAIL "THPS.ps2 did not come back under its name: $(ls "$sda" | tr '\n' ' ')"
+elif [ "$pair" != "Other.ps2 THPS.ps2" ] || [ "$after_named" != "Other.ps2 memcard1.ps2" ]; then
+	report "savedata:any-name" FAIL "two cards came back as [$pair], and beside memcard1.ps2 as [$after_named]"
+else
+	case "$third|$off|$notcard" in
+		*"more memory cards than the console's two slots"*"|"*"switch the Memory Card 2 setting on"*"|"*"does not read save data called \"notes.txt\""*)
+			report "savedata:any-name" PASS "THPS.ps2 is slot 1's card, native == sandbox, and leaves as THPS.ps2; two such cards fill both slots; a third, a card for a switched-off slot and notes.txt are refused" ;;
+		*) report "savedata:any-name" FAIL "refusals: [$third] [$off] [$notcard]" ;;
 	esac
 fi
 

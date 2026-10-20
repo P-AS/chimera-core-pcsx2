@@ -1386,3 +1386,29 @@ Measured here: the frontend test on OpenPS2BIOS and the disc, 3 passed (with
 (`bios:default`); on the retail BIOS and the disc, 4 passed. The core gate,
 the same checks as before: retail BIOS 44 passed, 0 failed, 6 skipped;
 OpenPS2BIOS 38 passed, 0 failed, 13 skipped.
+
+## 2026-10-20: a memory card under any name is taken (chimera#328, user-decided)
+
+A card from PCSX2 named anything but Mcd001.ps2 or Mcd002.ps2 (PCSX2 lets a
+person name cards, THPS.ps2 in the issue) was refused: the core read only
+the names for a slot. The owner decided: such a card fills slot 1 and then
+slot 2, in the order the project lists the files; it keeps its name, which
+is a label and not a rule; and its SHA-1 is what identifies it, with a
+warning when it differs. The last was already true of every project file
+(the project's file window says HASH MISMATCH and offers Open Anyway), so
+nothing in the core is needed for it.
+
+`PlanSaveData`, first thing in Init, decides which file is which card, and
+each card is opened from that file and leaves through Export Save Data under
+the same name. That changes one thing from #156: a card brought as
+Mcd001.ps2 now leaves as Mcd001.ps2, not memcard1.ps2. A card this run made
+leaves as memcardN.ps2, as before. Refused, because the machine would
+otherwise ignore them without a word: a third card, a card for a slot whose
+Memory Card setting is off, and a file that is neither a card nor bios.nvm.
+On an arcade board with its security dongle, slot 1 is the dongle's, and a
+card under another name goes to slot 2.
+
+Measured: the core gate on the retail BIOS, 45 passed, 0 failed, 6 skipped
+(new: savedata:any-name - THPS.ps2 is the machine the same card as
+memcard1.ps2 makes, native == sandbox, it leaves as THPS.ps2, two such cards
+fill both slots, and the three refusals).

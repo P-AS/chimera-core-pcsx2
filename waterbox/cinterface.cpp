@@ -250,34 +250,36 @@ static const char* const NVRAM_NAME = "bios.nvm";
 
 /* PCSX2's own names for the console's two cards (chimera#156): a card brought
  * from PCSX2 is Mcd001.ps2 or Mcd002.ps2, and is read as it is - a person does
- * not have to rename it. What leaves through Export Save Data keeps the
- * canonical memcardN.ps2. */
+ * not have to rename it. */
 static const char* const PCSX2_MEMCARD_NAME[2] = { "Mcd001.ps2", "Mcd002.ps2" };
 
-/* The name the project brought a card under, if it brought one: the entry of
- * the save data slot that is `name` (PCSX2's names are matched without regard
- * to case, as a file from Windows may come either way). */
-static bool SaveDataHas(const char* name, char* found, size_t found_size)
-{
-	char entry[512];
-	const int32_t saves = wbx_slot_count("savedata");
-	for (int32_t i = 0; i < saves; i++)
-		if (wbx_slot_name("savedata", i, entry, sizeof(entry)) != nullptr && !strcasecmp(entry, name))
-		{
-			snprintf(found, found_size, "%s", entry);
-			return true;
-		}
-	return false;
-}
+/* The file each of the console's two cards came in as, from the project's save
+ * data (empty: none came, and the slot's card is the canonical memcardN.ps2).
+ * A card keeps that name: it is opened under it and Export Save Data writes it
+ * back under it (chimera#328), so a card brought as THPS.ps2 leaves as
+ * THPS.ps2. Decided once, in Init, by PlanSaveData. */
+static char g_cardFile[2][512];
 
-/* The file card `card` opens: PCSX2's own name when the project brought the
- * card under it, the canonical one otherwise. */
+/* The file card `card` opens: the one the project brought for it, or the
+ * canonical name. */
 static std::string CardFileName(int card)
 {
-	char found[512];
-	if (card < 2 && SaveDataHas(PCSX2_MEMCARD_NAME[card], found, sizeof(found)))
-		return found;
+	if (card < 2 && g_cardFile[card][0])
+		return g_cardFile[card];
 	return MEMCARD_NAME[card];
+}
+
+/* The name a card leaves under through Export Save Data: the one it came in
+ * as, or the canonical one for a card this run made. */
+static const char* CardExportName(int card)
+{
+	return card < 2 && g_cardFile[card][0] ? g_cardFile[card] : MEMCARD_NAME[card];
+}
+
+static bool EndsWithNoCase(const char* s, const char* end)
+{
+	const size_t n = strlen(s), m = strlen(end);
+	return n >= m && !strcasecmp(s + n - m, end);
 }
 
 #ifdef CHIMERA_ARCADE
@@ -1359,9 +1361,114 @@ static void DecideFieldRate(bool verbose);
 
 
 
+/* The save data a project starts from, if it brought any: which file is which
+ * card.
+ *
+ * The files are mounted under their own names, and each card opens the file
+ * decided here (g_cardFile). A card named for its slot is that slot's:
+ * memcard1.ps2 and memcard2.ps2 (the names a card this run made leaves under),
+ * or PCSX2's Mcd001.ps2 and Mcd002.ps2, case aside. Any other .ps2 file is a
+ * card too (chimera#328, user-decided 2026-10-20): it fills the first slot no
+ * card is named for, slot 1 and then slot 2, in the order the project lists
+ * them. bios.nvm is the console's own memory (and sram.bin a board's).
+ *
+ * What this also does is REFUSE what the machine would silently ignore,
+ * because a project carrying someone's saved game where nothing reads it,
+ * booting to a blank card, is worse than one that will not boot: a file that
+ * is no card and nothing else, two cards for one slot, a third card, and a
+ * card for a slot that is switched off. */
+static bool PlanSaveData(char* err, size_t errsz)
+{
+	g_cardFile[0][0] = g_cardFile[1][0] = '\0';
+	static const char* const kOtherSaves[] = { "bios.nvm",
+#ifdef CHIMERA_ARCADE
+		/* ...and the NAMCO board's settings memory, on the machines that
+		 * have one. A PlayStation 2 project carrying one is a project with a
+		 * file nothing will read, which is what this check is for. */
+		"sram.bin",
+#endif
+	};
+	char entry[512];
+	char others[8][512];
+	int nothers = 0;
+	const int32_t saves = wbx_slot_count("savedata");
+	for (int32_t i = 0; i < saves; i++)
+	{
+		if (wbx_slot_name("savedata", i, entry, sizeof(entry)) == nullptr)
+			continue;
+		bool other_save = false;
+		for (const char* name : kOtherSaves)
+			if (!strcmp(entry, name)) other_save = true;
+		if (other_save)
+			continue;
+		int card = -1;
+		for (int c = 0; c < 2; c++)
+			if (!strcmp(entry, MEMCARD_NAME[c]) || !strcasecmp(entry, PCSX2_MEMCARD_NAME[c]))
+				card = c;
+		if (card < 0)
+		{
+			if (!EndsWithNoCase(entry, ".ps2"))
+			{
+				snprintf(err, errsz,
+					"this machine does not read save data called \"%s\". It reads memory cards "
+					"(.ps2 files: memcard1.ps2 and memcard2.ps2, the names Export Save Data writes, "
+					"PCSX2's own Mcd001.ps2 and Mcd002.ps2, or a card under any other name, which "
+					"goes in slot 1 and then slot 2) and bios.nvm.", entry);
+				return false;
+			}
+			if (nothers < 8)
+				snprintf(others[nothers++], sizeof(others[0]), "%s", entry);
+			continue;
+		}
+		/* one card to a slot: the same slot's card under both of its names
+		 * is two cards, and which one is in the machine would be a guess */
+		if (g_cardFile[card][0])
+		{
+			snprintf(err, errsz, "the save data carries two cards for slot %d, %s and %s - keep one",
+				card + 1, g_cardFile[card], entry);
+			return false;
+		}
+		snprintf(g_cardFile[card], sizeof(g_cardFile[card]), "%s", entry);
+	}
+#ifdef CHIMERA_ARCADE
+	/* on a board with its security dongle, slot 1 holds the dongle (a slot of
+	 * its own), so a card under another name goes to slot 2 */
+	const bool dongle = ArcadeBoardFromSettings() != CHIMERA_ARCADE_NONE && wbx_slot_count("dongle") > 0;
+#else
+	const bool dongle = false;
+#endif
+	for (int i = 0; i < nothers; i++)
+	{
+		int card = !g_cardFile[0][0] && !dongle ? 0 : !g_cardFile[1][0] ? 1 : -1;
+		if (card < 0)
+		{
+			snprintf(err, errsz,
+				"the save data carries more memory cards than the console's two slots (%s, %s and %s) - keep two",
+				g_cardFile[0], g_cardFile[1], others[i]);
+			return false;
+		}
+		snprintf(g_cardFile[card], sizeof(g_cardFile[card]), "%s", others[i]);
+	}
+	for (int card = 0; card < 2; card++)
+	{
+		const bool present = wbx_setting_bool(
+			card == 0 ? "memcard1" : "memcard2", card == 0 ? 1 : 0) != 0;
+		if (g_cardFile[card][0] && !present)
+		{
+			snprintf(err, errsz,
+				"the save data carries a card for slot %d (%s), but there is no card in slot %d: "
+				"switch the Memory Card %d setting on", card + 1, g_cardFile[card], card + 1, card + 1);
+			return false;
+		}
+	}
+	return true;
+}
+
 ECL_EXPORT int Init(void)
 {
 	g_loadError[0] = '\0';
+	if (!PlanSaveData(g_loadError, sizeof(g_loadError)))
+		return 0;
 
 	/* PCSX2 says a great deal about what it is doing, and a core that swallowed
 	 * it would be a core nobody can debug. It goes to stderr, where a gate and a
@@ -1488,57 +1595,6 @@ ECL_EXPORT int Init(void)
 	 * slot map at all. Handling only the first is a core that works in a
 	 * project and boots an empty tray everywhere else, which is exactly what
 	 * the first frontend run of this core did. */
-	/* The save data a project starts from, if it brought any.
-	 *
-	 * The files are mounted under their own names and the machine finds them
-	 * that way - the memory cards and the NVRAM each open the name they always
-	 * open, whether the frontend supplied one or not. Nothing here has to load
-	 * them; what this does is REFUSE a file the machine would silently ignore,
-	 * because a project carrying someone's saved game under a name nothing
-	 * reads, booting to a blank card, is worse than one that will not boot. */
-	{
-		static const char* const kKnownSaves[] = { "memcard1.ps2", "memcard2.ps2", "bios.nvm",
-#ifdef CHIMERA_ARCADE
-			/* ...and the NAMCO board's settings memory, on the machines that
-			 * have one. A PlayStation 2 project carrying one is a project with
-			 * a file nothing will read, which is what this check is for. */
-			"sram.bin",
-#endif
-		};
-		char entry[512];
-		const int32_t saves = wbx_slot_count("savedata");
-		for (int32_t i = 0; i < saves; i++)
-		{
-			if (wbx_slot_name("savedata", i, entry, sizeof(entry)) == nullptr)
-				continue;
-			bool known = false;
-			for (const char* known_name : kKnownSaves)
-				if (!strcmp(entry, known_name)) { known = true; break; }
-			for (int card = 0; card < 2 && !known; card++)
-				if (!strcasecmp(entry, PCSX2_MEMCARD_NAME[card])) known = true;
-			if (!known)
-			{
-				snprintf(g_loadError, sizeof(g_loadError),
-					"this machine does not read save data called \"%s\". It reads "
-					"memcard1.ps2, memcard2.ps2 and bios.nvm - the names Export Save "
-					"Data writes - and PCSX2's own Mcd001.ps2 and Mcd002.ps2.", entry);
-				return 0;
-			}
-		}
-		/* one card to a slot: the same slot's card under both of its names is
-		 * two cards, and which one is in the machine would be a guess */
-		for (int card = 0; card < 2; card++)
-		{
-			char a[512], b[512];
-			if (SaveDataHas(MEMCARD_NAME[card], a, sizeof(a)) && SaveDataHas(PCSX2_MEMCARD_NAME[card], b, sizeof(b)))
-			{
-				snprintf(g_loadError, sizeof(g_loadError),
-					"the save data carries two cards for slot %d, %s and %s - keep one", card + 1, a, b);
-				return 0;
-			}
-		}
-	}
-
 	VMBootParameters boot;
 	char name[512];
 #ifdef CHIMERA_ARCADE
@@ -2251,7 +2307,7 @@ static int CollectSaveData(SaveData* out, int max)
 		const u8* image = FileMcd_GetImage(static_cast<uint>(slot), &size);
 		if (!image)
 			continue;
-		out[count++] = {MEMCARD_NAME[slot], image, static_cast<int64_t>(size)};
+		out[count++] = {CardExportName(slot), image, static_cast<int64_t>(size)};
 	}
 
 	if (count < max)
