@@ -542,20 +542,28 @@ fi
 # buffer onto another texel for texel took its neighbour's bits: Black drew a
 # white haze over everything far away (chimera issue 257). The core says once,
 # from inside the GS, which rounding it found and which it runs with; both
-# flavors must say the default (00001f80) for the GS and something else for
-# the thread, or the check has seen nothing.
+# flavors must say the default (MXCSR 00001f80 on x86-64, FPCR 00000000 on
+# aarch64) for the GS and something else for the thread, or the check has
+# seen nothing.
 wr="$work/bios-rounding"
 mkdir -p "$wr"
 cp "$bios" "$wr/bios.bin"
 printf '{"verbose":true}' > "$wr/settings"
 fp_nat="$("$nat/run-native" "$wr" --frames 60 2>&1 | plain | sed -n 's/.*the GS runs with floating point control \([0-9a-f]*\); the thread it runs on had \([0-9a-f]*\).*/\1 \2/p' | head -1)"
 fp_box="$("$nat/run-wbx" "$gst/core.wbx" "$wr" --frames 60 2>&1 | plain | sed -n 's/.*the GS runs with floating point control \([0-9a-f]*\); the thread it runs on had \([0-9a-f]*\).*/\1 \2/p' | head -1)"
-if [ -z "$fp_nat" ] || [ -z "$fp_box" ]; then
+case "$(uname -m)" in
+	aarch64) fp_default=00000000 ;;
+	x86_64) fp_default=00001f80 ;;
+	*) fp_default="" ;;
+esac
+if [ -z "$fp_default" ]; then
+	report "gs:rounding" FAIL "miniBox runs on x86-64 and aarch64 only, not $(uname -m)"
+elif [ -z "$fp_nat" ] || [ -z "$fp_box" ]; then
 	report "gs:rounding" FAIL "the core did not say which rounding the GS runs with (native [$fp_nat] sandbox [$fp_box])"
-elif [ "${fp_nat%% *}" = 00001f80 ] && [ "${fp_box%% *}" = 00001f80 ] && [ "${fp_nat##* }" != 00001f80 ] && [ "$fp_nat" = "$fp_box" ]; then
+elif [ "${fp_nat%% *}" = "$fp_default" ] && [ "${fp_box%% *}" = "$fp_default" ] && [ "${fp_nat##* }" != "$fp_default" ] && [ "$fp_nat" = "$fp_box" ]; then
 	report "gs:rounding" PASS "the GS runs with the default rounding (${fp_nat%% *}) on a thread that had the console's (${fp_nat##* }), in both flavors"
 else
-	report "gs:rounding" FAIL "the GS runs with [$fp_nat] natively and [$fp_box] in the sandbox (wanted 00001f80, on a thread with another)"
+	report "gs:rounding" FAIL "the GS runs with [$fp_nat] natively and [$fp_box] in the sandbox (wanted $fp_default, on a thread with another)"
 fi
 
 # A patch from the database reaches the console's memory. The core is asked
