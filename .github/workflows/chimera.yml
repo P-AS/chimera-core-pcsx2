@@ -22,9 +22,8 @@ name: chimera waterbox core
 #
 # Both gates run twice, once per host CPU, on a runner of that CPU: x86-64
 # against Chimera's public main, and aarch64 (miniBox's aarch64 machine, where
-# PCSX2 has only its interpreters, so the OpenPS2BIOS tier runs on them) against the aarch64 forks of Chimera and
-# miniBox (github.com/P-AS/chimera, branch aarch64, whose
-# extern/chimera-common-minibox is github.com/P-AS/chimera-common-minibox).
+# PCSX2 has only its interpreters, so the OpenPS2BIOS tier runs on them) against Chimera's aarch64 build (ToolAssisted-run/chimera#309; until it
+# merges, github.com/P-AS/chimera, branch aarch64), whose miniBox is upstream's.
 # Both must pass for a release, and both packages are in it, each named by its
 # CPU: pcsx2-<version>-x64.chimeraCore and pcsx2-<version>-arm64.chimeraCore.
 

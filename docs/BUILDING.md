@@ -9,9 +9,10 @@ file runs on Linux and on Windows, because the guest inside it is run by
 Chimera's sandbox (miniBox) on either.
 
 A package is machine code for one CPU, the CPU it was built on: x86-64, or
-aarch64 (miniBox's aarch64 machine, which needs the aarch64 forks of Chimera
-and miniBox: https://github.com/P-AS/chimera, branch `aarch64`, whose
-`extern/chimera-common-minibox` is https://github.com/P-AS/chimera-common-minibox).
+aarch64 (miniBox's aarch64 machine, which is in miniBox's main; Chimera's
+aarch64 build is ToolAssisted-run/chimera#309, until it merges the branch
+`aarch64` of https://github.com/P-AS/chimera, whose `extern/chimera-common-minibox`
+is upstream's miniBox).
 The steps are the same on both. The aarch64 build differs in what it is:
 
 - PCSX2 has no recompilers for arm64, so that core has its interpreters alone.

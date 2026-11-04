@@ -41,8 +41,8 @@ natively as a reference, and the gate holds the two byte-identical.
 ## Two CPUs
 
 A package is machine code for the CPU it is built on: x86-64, or aarch64 on
-miniBox's aarch64 machine (the aarch64 forks of Chimera and miniBox:
-`P-AS/chimera`, branch `aarch64`). Every CPU choice in the build names both
+miniBox's aarch64 machine (miniBox's main has it; Chimera's aarch64 build is
+ToolAssisted-run/chimera#309, until it merges `P-AS/chimera`, branch `aarch64`). Every CPU choice in the build names both
 and refuses any other. On aarch64 PCSX2 has no recompilers, so that core
 interprets, generates no code at all (`CHIMERA_NO_CODE_GENERATORS`, patch
 0032) and refuses a project asking for the recompilers; `docs/BUILDING.md`
