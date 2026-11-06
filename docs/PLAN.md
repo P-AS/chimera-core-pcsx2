@@ -1526,3 +1526,42 @@ have, is refused with that name.
 
 Tests: `pnach:table` (no bios), `pnach:refused` (a bios), `pnach:widescreen`
 (Black, by `PCSX2_BLACK_DISC`).
+
+## The interpreter computes the FPU's Full clamp mode (pcsx2 PR #4, user-decided 2026-11-04)
+
+In Klonoa 2 (SLUS-20151) the green Moos that Klonoa grabs in the first level
+warped back to the area's entrance on the interpreter, so the level could not
+be finished; the recompiler got it right. PCSX2's game database puts the game,
+and 157 others, in the EE FPU's clamp mode 3, "Full", and upstream implements
+that mode only in its recompiler (`x86/iFPUd.cpp`): the interpreter ignored
+it. In Full mode the recompiler treats exponent 255 as an ordinary number
+rather than clamping it, adds without the guard bits the EE does not have, and
+divides and takes square roots in their own rounding modes.
+
+Patch 0031 (by P-AS, pcsx2 PR #4) makes the interpreter do the same
+arithmetic in C when `CHECK_FPU_FULL` is set: operands are widened to double,
+add and subtract mask as `FPU_ADD_SUB` does, results are narrowed as
+`ToPS2FPU_Full` does (the PS2's range, its overflow and underflow flags, the
+ACC's overflow flag), and DIV, SQRT and RSQRT use their own rounding modes.
+MAX, MIN, ABS, NEG, MOV and the conversions were already the same in both.
+Titles not in Full mode are interpreted exactly as before.
+
+**Measured.** `tests/own/chimera-fputest`, a program of ours, runs every FPU
+instruction on 634,880 sets of operands and keeps each result and FCR31. Its
+two discs start it under the names of two Full-mode titles, Klonoa 2 and
+Final Fantasy X (which also rounds up), so the database turns Full mode on.
+Without the patch, 264,333 and 267,628 results differ between the
+recompiler and the interpreter; with it, none do, natively and in the
+sandbox, on a retail bios and on OpenPS2BIOS. The recompiler's results are
+unchanged, and so are the interpreter's on the same program run with no game
+database entry. Bits 0 and 24 of FCR31 are left out of the comparison: the
+recompiler sets them whenever a program writes FCR31 and the interpreter
+does not, in every mode.
+
+**What it changes for a movie.** A movie made on the interpreter with one of
+the 158 Full-mode titles may play back differently: the interpreter now
+computes another machine for them, the one the recompiler always computed.
+The recompiler, the default, is unchanged.
+
+Test: `fpu:full-mode` (a bios). Negative control, 2026-11-04: with the patch
+taken out it fails, naming 264,333 differing results.

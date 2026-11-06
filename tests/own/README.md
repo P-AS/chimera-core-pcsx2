@@ -14,3 +14,13 @@ free to distribute goes here instead, where tracking it needs no exception.
   the pads on a retail BIOS and on OpenPS2BIOS alike, and is what the gate's
   pad, gun, column and renderer checks run, and the disc the frontend test
   runs when there is no game.
+- `chimera-fputest-full.iso` and `chimera-fputest-full-round-up.iso` - this
+  repository's test of the EE's floating point: every FPU instruction on
+  634,880 sets of operands, the results kept in memory and nothing drawn.
+  The two discs hold the same program under the names of two games the
+  game database puts in the FPU's Full clamp mode (one also rounds up), so
+  that PCSX2 turns that mode on; nothing of either game is on them. Source,
+  build script, the comparison script and licences (MIT for the program;
+  AFL-2.0 for the ps2sdk code it is linked with; newlib's) are in
+  `chimera-fputest/`. It runs on a retail BIOS and on OpenPS2BIOS alike, and
+  is what the gate's `fpu:full-mode` check runs.

@@ -544,6 +544,7 @@ if [ -z "$bios" ]; then
 	report "gun:aims" SKIP "needs a bios as well as a GunCon 2 disc"
 	report "ports:columns" SKIP "needs a bios"
 	report "gs:rounding" SKIP "needs a bios"
+	report "fpu:full-mode" SKIP "needs a bios: would prove the interpreter computes the FPU's Full mode as the recompiler does"
 	report "patch:memory" SKIP "needs a bios: would prove a patch from the database reaches the console's memory"
 	report "pnach:refused" SKIP "needs a bios: would prove a patch the game does not have is refused, with the reason"
 	report "disc:boots" SKIP "needs a bios as well as a disc"
@@ -675,6 +676,51 @@ if "$nat/run-wbx" "$gst/core.wbx" "$wi" --frames 60 --rerecord 2>/dev/null | dig
 	report "cpu:interpreter-rerecord" PASS "save+load around every frame changes nothing"
 else
 	report "cpu:interpreter-rerecord" FAIL "rerecord differs under the interpreters"
+fi
+
+# The FPU's Full clamp mode: the interpreter must compute what the recompiler
+# does. PCSX2's game database puts 158 titles in the EE FPU's Full mode, which
+# upstream implements in its recompiler only (x86/iFPUd.cpp); patch 0031 gives
+# the interpreter the same arithmetic. tests/own/chimera-fputest runs every
+# FPU instruction on 634,880 sets of operands and keeps the results in memory.
+# Its two discs start the program under the names of two Full-mode games (one
+# of which also rounds up), so the database turns Full mode on; the log line
+# that says so is checked, or both CPUs could agree in another mode. Each disc
+# runs in the sandboxed core on the recompiler and on the interpreter, and
+# compare.py compares the two memories. Without patch 0031, about 265,000
+# results differ on each disc (measured 2026-11-04).
+fpu_cmp="$root/tests/own/chimera-fputest/compare.py"
+if [ ! -f "$root/tests/own/chimera-fputest-full.iso" ] || [ ! -f "$root/tests/own/chimera-fputest-full-round-up.iso" ]; then
+	report "fpu:full-mode" SKIP "tests/own/chimera-fputest-full.iso or -full-round-up.iso is missing"
+else
+	fpu_fail=""
+	fpu_said=""
+	for fpu_disc in full full-round-up; do
+		for fpu_cpu in recompiler interpreter; do
+			fpu_wd="$work/fpu-$fpu_disc-$fpu_cpu"
+			mkdir -p "$fpu_wd"
+			cp "$bios" "$fpu_wd/bios.bin"
+			cp "$root/tests/own/chimera-fputest-$fpu_disc.iso" "$fpu_wd/"
+			printf '{"disc":["chimera-fputest-%s.iso"]}' "$fpu_disc" > "$fpu_wd/slots"
+			printf '{"cpu_core":"%s","verbose":true}' "$fpu_cpu" > "$fpu_wd/settings"
+			if ! "$nat/run-wbx" "$gst/core.wbx" "$fpu_wd" --frames 600 --dump-domain "EE RAM" "$fpu_wd/ee.bin" > "$fpu_wd/log" 2>&1; then
+				fpu_fail="${fpu_fail:-$fpu_disc on the $fpu_cpu: the runner failed}"
+			elif ! grep -q 'Changing EE/FPU clamp mode \[mode=3\]' "$fpu_wd/log"; then
+				fpu_fail="${fpu_fail:-$fpu_disc on the $fpu_cpu: the game database did not turn Full mode on}"
+			fi
+		done
+		[ -n "$fpu_fail" ] && break
+		if fpu_out="$(python3 "$fpu_cmp" "$work/fpu-$fpu_disc-recompiler/ee.bin" "$work/fpu-$fpu_disc-interpreter/ee.bin")"; then
+			fpu_said="$fpu_out"
+		else
+			fpu_fail="$fpu_disc: $(head -3 <<< "$fpu_out" | tr '\n' ' ')"
+		fi
+	done
+	if [ -n "$fpu_fail" ]; then
+		report "fpu:full-mode" FAIL "$fpu_fail"
+	else
+		report "fpu:full-mode" PASS "Full mode, rounding towards zero and up: $fpu_said on the interpreter as on the recompiler"
+	fi
 fi
 
 # Turbo: the display stage switched off for the first half of the run and back
