@@ -395,7 +395,9 @@ own test program on its own disc (source, build and licence in
 a second program of ours (in `tests/own/chimera-fputest/`) that runs every
 FPU instruction on 634,880 sets of operands, it runs `fpu:full-mode`: in
 the FPU's Full clamp mode, which 158 titles use, the interpreter's results
-are the recompiler's (patch 0031).
+are the recompiler's (patch 0031). On aarch64 there is no recompiler to compare
+with: both discs run on the interpreter, must finish in Full mode, and the
+check says SKIP.
 
 **More content, more checks:**
 

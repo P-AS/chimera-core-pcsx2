@@ -688,15 +688,22 @@ fi
 # that says so is checked, or both CPUs could agree in another mode. Each disc
 # runs in the sandboxed core on the recompiler and on the interpreter, and
 # compare.py compares the two memories. Without patch 0031, about 265,000
-# results differ on each disc (measured 2026-11-04).
+# results differ on each disc (measured 2026-11-04). The aarch64 core has no
+# recompiler to compare with: there each disc runs on the interpreter alone, a
+# dump is compared with itself so unfinished results still fail, and the check
+# says SKIP, because the comparison it exists for has not been made.
 fpu_cmp="$root/tests/own/chimera-fputest/compare.py"
 if [ ! -f "$root/tests/own/chimera-fputest-full.iso" ] || [ ! -f "$root/tests/own/chimera-fputest-full-round-up.iso" ]; then
 	report "fpu:full-mode" SKIP "tests/own/chimera-fputest-full.iso or -full-round-up.iso is missing"
 else
 	fpu_fail=""
 	fpu_said=""
+	case "$(uname -m)" in
+		aarch64) fpu_cpus=interpreter fpu_ref=interpreter ;;
+		*) fpu_cpus="recompiler interpreter" fpu_ref=recompiler ;;
+	esac
 	for fpu_disc in full full-round-up; do
-		for fpu_cpu in recompiler interpreter; do
+		for fpu_cpu in $fpu_cpus; do
 			fpu_wd="$work/fpu-$fpu_disc-$fpu_cpu"
 			mkdir -p "$fpu_wd"
 			cp "$bios" "$fpu_wd/bios.bin"
@@ -710,7 +717,7 @@ else
 			fi
 		done
 		[ -n "$fpu_fail" ] && break
-		if fpu_out="$(python3 "$fpu_cmp" "$work/fpu-$fpu_disc-recompiler/ee.bin" "$work/fpu-$fpu_disc-interpreter/ee.bin")"; then
+		if fpu_out="$(python3 "$fpu_cmp" "$work/fpu-$fpu_disc-$fpu_ref/ee.bin" "$work/fpu-$fpu_disc-interpreter/ee.bin")"; then
 			fpu_said="$fpu_out"
 		else
 			fpu_fail="$fpu_disc: $(head -3 <<< "$fpu_out" | tr '\n' ' ')"
@@ -718,6 +725,8 @@ else
 	done
 	if [ -n "$fpu_fail" ]; then
 		report "fpu:full-mode" FAIL "$fpu_fail"
+	elif [ "$fpu_ref" = interpreter ]; then
+		report "fpu:full-mode" SKIP "no recompiler on aarch64 to compare with: both discs finished in Full mode on the interpreter, and that is all this proves"
 	else
 		report "fpu:full-mode" PASS "Full mode, rounding towards zero and up: $fpu_said on the interpreter as on the recompiler"
 	fi
