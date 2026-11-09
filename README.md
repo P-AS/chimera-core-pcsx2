@@ -35,10 +35,11 @@ from this repository's
 page, or build it, and put it in the `cores` folder beside Chimera's program;
 Tools > Core Manager... lists what is there.
 
-Each release has two packages, one per CPU: `pcsx2-<version>-x64.chimeraCore`
-and `pcsx2-<version>-arm64.chimeraCore`. **You most likely want the x64 one.**
-Take the arm64 one only if you know you are using an arm64 device. Put only one
-of them in the `cores` folder. The same file runs on Linux and on Windows. The
+Each release has two packages, one per CPU: `pcsx2-<version>-x86_64.chimeraCore`
+and `pcsx2-<version>-aarch64.chimeraCore`. **On Windows or Linux you most likely
+want the x86_64 one.** Take the aarch64 one only if you know you are using an ARM
+device; on a Mac, aarch64 for Apple silicon and x86_64 for an Intel Mac. Put only
+one of them in the `cores` folder. The same file runs on Linux and on Windows. The
 games are yours to provide, and so is the bios: a copy of your own console's,
 or OpenPS2BIOS 0.2
 ([download](https://github.com/TamaribaEmu/OpenPS2BIOS/releases/tag/v0.2),

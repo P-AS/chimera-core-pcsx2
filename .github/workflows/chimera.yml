@@ -22,10 +22,11 @@ name: chimera waterbox core
 #
 # Both gates run twice, once per host CPU, on a runner of that CPU: x86-64
 # against Chimera's public main, and aarch64 (miniBox's aarch64 machine, where
-# PCSX2 has only its interpreters, so the OpenPS2BIOS tier runs on them) against Chimera's aarch64 build (ToolAssisted-run/chimera#309; until it
-# merges, github.com/P-AS/chimera, branch aarch64), whose miniBox is upstream's.
+# PCSX2 has only its interpreters, so the OpenPS2BIOS tier runs on them)
+# against Chimera's public main too, which builds aarch64 since
+# ToolAssisted-run/chimera#309 merged (2026-11-06), and miniBox is upstream's.
 # Both must pass for a release, and both packages are in it, each named by its
-# CPU: pcsx2-<version>-x64.chimeraCore and pcsx2-<version>-arm64.chimeraCore.
+# CPU: pcsx2-<version>-x86_64.chimeraCore and pcsx2-<version>-aarch64.chimeraCore.
 
 on:
   pull_request:
@@ -61,14 +62,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - arch: x64
+          - arch: x86_64
             runner: ubuntu-latest
             chimera-repo: ToolAssisted-run/chimera
             chimera-ref: main
-          - arch: arm64
+          - arch: aarch64
             runner: ubuntu-26.04-arm
-            chimera-repo: P-AS/chimera
-            chimera-ref: aarch64
+            chimera-repo: ToolAssisted-run/chimera
+            chimera-ref: main
     steps:
       - uses: actions/checkout@v6
         with:
@@ -189,14 +190,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - arch: x64
+          - arch: x86_64
             runner: ubuntu-latest
             chimera-repo: ToolAssisted-run/chimera
             chimera-ref: main
-          - arch: arm64
+          - arch: aarch64
             runner: ubuntu-26.04-arm
-            chimera-repo: P-AS/chimera
-            chimera-ref: aarch64
+            chimera-repo: ToolAssisted-run/chimera
+            chimera-ref: main
     steps:
       - uses: actions/checkout@v6
         with:
@@ -306,18 +307,16 @@ jobs:
     #
     # The logic is Chimera's tools/publish-core.sh, called through one reusable
     # workflow, so all fifteen cores publish the same way and there is one place
-    # to change it - the aarch64 fork's, which publishes a package per CPU,
-    # running the fork's own publish-core.sh.
+    # to change it, which publishes a package per CPU (x86_64 and aarch64, the
+    # names publish-core.sh takes since Chimera's 09d87d78a).
     name: publish
     needs: [ core-gate, frontend-gate ]
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     permissions:
       contents: write
-    uses: P-AS/chimera/.github/workflows/publish-core.yml@aarch64
+    uses: ToolAssisted-run/chimera/.github/workflows/publish-core.yml@main
     with:
       core-id: pcsx2
       artifact: pcsx2-${{ github.sha }}
       package: pcsx2.chimeraCore
-      arches: x64 arm64
-      chimera-repository: P-AS/chimera
-      chimera-ref: aarch64
+      arches: x86_64 aarch64

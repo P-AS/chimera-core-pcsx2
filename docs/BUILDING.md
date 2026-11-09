@@ -10,9 +10,7 @@ Chimera's sandbox (miniBox) on either.
 
 A package is machine code for one CPU, the CPU it was built on: x86-64, or
 aarch64 (miniBox's aarch64 machine, which is in miniBox's main; Chimera's
-aarch64 build is ToolAssisted-run/chimera#309, until it merges the branch
-`aarch64` of https://github.com/P-AS/chimera, whose `extern/chimera-common-minibox`
-is upstream's miniBox).
+main builds aarch64 since ToolAssisted-run/chimera#309 merged, 2026-11-06).
 The steps are the same on both. The aarch64 build differs in what it is:
 
 - PCSX2 has no recompilers for arm64, so that core has its interpreters alone.
@@ -316,10 +314,11 @@ is a file a person puts in Chimera's `Cores` folder.
   Tools > Core Manager....
 - **Without building.** Download the package from this repository's Releases
   page, https://github.com/ToolAssisted-run/chimera-core-pcsx2/releases, and
-  put it in the same folder. A release has `pcsx2-<version>-x64.chimeraCore`
-  and `pcsx2-<version>-arm64.chimeraCore`: you most likely want the x64 one;
-  take the arm64 one only if you know you are using an arm64 device. Put only
-  one of them in the folder. CI publishes a dated `nightly-YYYY-MM-DD` release
+  put it in the same folder. A release has `pcsx2-<version>-x86_64.chimeraCore`
+  and `pcsx2-<version>-aarch64.chimeraCore`: on Windows or Linux you most likely
+  want the x86_64 one; take the aarch64 one only if you know you are using an
+  ARM device (on a Mac, aarch64 for Apple silicon, x86_64 for an Intel Mac). Put
+  only one of them in the folder. CI publishes a dated `nightly-YYYY-MM-DD` release
   from the scheduled run, when `main` moved since the last one.
 
 Tools > Core Manager... lists what is in the folder; Refresh List rescans it.
@@ -327,8 +326,8 @@ Tools > Core Manager... lists what is in the folder; Refresh List rescans it.
 A package's version is the commit it was built from. A hand-built package
 carries `+local` and is for testing; Chimera's publishing script refuses to
 publish one. A published package is named
-`pcsx2-<version>-<x64|arm64>.chimeraCore` (before packages carried their CPU,
-`pcsx2-<version>.chimeraCore`, which is x64) and
+`pcsx2-<version>-<x86_64|aarch64>.chimeraCore` (before packages carried their CPU,
+`pcsx2-<version>.chimeraCore`, which is x86_64) and
 the one built here `pcsx2.chimeraCore`; Chimera identifies a package by its
 content, not by its file name.
 
